@@ -1,0 +1,21 @@
+<package format="2">
+  <name>q_learning</name>
+  <version>0.0.1</version>
+  <description>The q_learning package</description>
+
+  <maintainer email="farhang.nba@gmail.com">user</maintainer>
+
+  <license>TODO</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <build_depend>roscpp</build_depend>
+  <build_depend>std_msgs</build_depend>
+
+  <run_depend>roscpp</run_depend>
+  <run_depend>std_msgs</run_depend>
+
+  <export>
+    <build_type>catkin</build_type>
+  </export>
+</package>
