@@ -1,110 +1,55 @@
-# q-learning
 
-The `q_learning` package provides a Q-learning implementation for use in ROS (Robot Operating System) environments. This package is designed to be configurable via a `.yaml` file, allowing easy tuning of parameters.
+# Underwater Vehicle Control using Deep Q-Learning
 
-## Features
+This repository contains a Deep Q-Learning-based system to control an underwater vehicle using reinforcement learning (RL). The agent interacts with the environment through ROS (Robot Operating System) topics and learns an optimal policy to control the vehicle's thrusters and servos in order to minimize position, velocity, and orientation errors.
 
-- Q-learning implementation with configurable parameters
-- Integration with ROS parameter server
-- Example configuration file
+## Overview
 
-## Installation
+This project uses a Deep Q-Network (DQN) to train an agent to control an underwater vehicle. The agent learns from the environment by interacting with it through ROS topics, receiving feedback in the form of errors (position, velocity, orientation), and adjusting the thrusters and servos to minimize these errors.
 
-1. **Clone the repository**:
+The code includes:
+- A custom `GridWorldEnv` environment for interaction with the underwater vehicle.
+- A Deep Q-Network implemented using PyTorch (`QNetwork` class).
+- A replay buffer for experience replay (`ReplayBuffer` class).
+- A training loop that uses the DQN to learn optimal control policies (`Agent` class).
 
-    ```bash
-    cd ~/catkin_ws/src
-    git clone https://github.com/farhangnaderi/q-learning
-    ```
+## Dependencies
 
-2. **Build the package**:
+- Python 3.x
+- PyTorch
+- ROS (Robot Operating System)
+- NumPy
+- Matplotlib
 
-    ```bash
-    cd ~/catkin_ws
-    catkin build
-    source devel/setup.bash
-    ```
+Make sure you have ROS set up and running before using this project. The code relies on ROS topics for real-time communication with the underwater vehicle.
 
-## Configuration
+## Setup
 
-The Q-learning parameters can be configured via a YAML file. The default configuration file is located in the `config` directory of this package.
+1. **Install the dependencies:**
+   ```bash
+   pip install torch numpy matplotlib
+   ```
+   
+   Ensure that ROS is installed and properly set up in your system. You can follow [ROS installation instructions](http://wiki.ros.org/ROS/Installation) to install the necessary ROS packages.
 
-### Default Configuration File
+2. **Clone this repository:**
+   ```bash
+   git clone https://github.com/yourusername/underwater-vehicle-dqn.git
+   cd underwater-vehicle-dqn
+   ```
 
-`config/config.yaml`:
+In this mode, the agent will continue to learn and improve its policy while interacting with the environment.
 
-```yaml
-q_learning:
-  num_states: 100
-  num_actions: 2
-  alpha: 0.1
-  gamma: 0.9
-  epsilon: 0.1
-```
+## Key Components
 
-### Parameter Description
+- **`GridWorldEnv`**: The custom environment simulating the underwater vehicle's control system. It interacts with the ROS topics to receive error feedback and send control commands to the vehicle's thrusters and servos.
+  
+- **`QNetwork`**: A PyTorch neural network that estimates the Q-values for each action given a state. This is the core of the DQN algorithm.
 
-- **num_states**: The number of states in the Q-learning model.
-- **num_actions**: The number of actions in the Q-learning model (e.g., thrust positive, thrust negative).
-- **alpha**: The learning rate.
-- **gamma**: The discount factor.
-- **epsilon**: The exploration rate.
+- **`ReplayBuffer`**: A memory buffer that stores past experiences (state, action, reward, next state) to be replayed for training. It helps stabilize the learning process by breaking correlations in the data.
 
-## Usage
+- **`Agent`**: The agent that uses the QNetwork to interact with the environment. It selects actions using an epsilon-greedy policy and updates its Q-values through experience replay.
 
-To use the `q_learning` package in your ROS project, follow these steps:
+## License
 
-1. **Include the Q-learning header in your code**:
-
-    ```cpp
-    #include "q_learning/q_learning.h"
-    ```
-
-2. **Load the Q-learning parameters**:
-
-    ```cpp
-    ros::NodeHandle nh;
-    int num_states, num_actions;
-    double alpha, gamma, epsilon;
-    nh.getParam("q_learning/num_states", num_states);
-    nh.getParam("q_learning/num_actions", num_actions);
-    nh.getParam("q_learning/alpha", alpha);
-    nh.getParam("q_learning/gamma", gamma);
-    nh.getParam("q_learning/epsilon", epsilon);
-
-    QLearning q_learning(num_states, num_actions, alpha, gamma, epsilon);
-    ```
-
-3. **Use the Q-learning instance in your control logic**:
-
-    ```cpp
-    int current_state = getCurrentState();
-    int action = q_learning.selectAction(current_state);
-    double thrust_direction = (action == 0) ? 1.0 : -1.0;
-    // Apply thrust_direction in your control logic
-    ```
-
-4. **Update the Q-learning model**:
-
-    ```cpp
-    int next_state = getNextState();
-    double reward = calculateReward();
-    q_learning.update(current_state, action, reward, next_state);
-    ```
-
-### Example Launch File
-
-An example launch file to load the default configuration and start your node:
-
-`launch/q_learning_example.launch`:
-
-```xml
-<launch>
-  <rosparam file="$(find q_learning)/config/config.yaml" command="load"/>
-  <node pkg="your_package" type="your_node" name="your_node" output="screen"/>
-</launch>
-```
-
-## Contact
-
-For questions or comments, please contact [Farhang Naderi](mailto:farhang.nba@gmail.com).
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
