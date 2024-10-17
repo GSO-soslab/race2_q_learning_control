@@ -10,6 +10,39 @@ from std_msgs.msg import Float64, Float32,Int32MultiArray
 from collections import deque
 import random
 import matplotlib.pyplot as plt
+import yaml
+
+
+# Load configuration from the yaml file
+with open('config/config.yaml', 'r') as file:
+    config = yaml.safe_load(file)
+
+# Accessing agent parameters from config
+agent_config = config['agent']
+state_size = agent_config['state_size']
+action_size = agent_config['action_size']
+buffer_size = agent_config['buffer_size']
+batch_size = agent_config['batch_size']
+gamma = agent_config['gamma']
+lr = agent_config['lr']
+
+# Accessing environment parameters from config
+env_config = config['env']
+position_err = env_config['position_err']
+v_err = env_config['v_err']
+orientation_err = env_config['orientation_err']
+omega_ref_err = env_config['omega_ref_err']
+joint_positions = env_config['joint_positions']
+
+# Reward configuration
+reward_config = config['reward']
+lambda_values = reward_config['lambda_values']
+a = reward_config['a']
+xi = reward_config['xi']
+theta = reward_config['theta']
+zeta = reward_config['zeta']
+alpha = reward_config['alpha']
+small_lambda = reward_config['small_lambda']
 
 
 # action_mapping = {
@@ -66,14 +99,23 @@ class ReplayBuffer:
 
 class GridWorldEnv:
     def __init__(self):
-        self.state_size = 12
-        self.action_size = 2
-        self.position_err = np.zeros(3)
-        self.v_err = np.zeros(3)
-        self.orientation_err = np.zeros(3)
-        self.omega_ref_err = np.zeros(3)
-        self.joint_positions = np.zeros(2)
-        self._episode_ended = False
+        # self.state_size = 12
+        # self.action_size = 2
+        # self.position_err = np.zeros(3)
+        # self.v_err = np.zeros(3)
+        # self.orientation_err = np.zeros(3)
+        # self.omega_ref_err = np.zeros(3)
+        # self.joint_positions = np.zeros(2)
+        # self._episode_ended = False
+
+        self.state_size = env_config['setpoint_size']
+        self.position_err = np.array(env_config['position_err'])
+        self.v_err = np.array(env_config['v_err'])
+        self.orientation_err = np.array(env_config['orientation_err'])
+        self.omega_ref_err = np.array(env_config['omega_ref_err'])
+        self.joint_positions = np.array(env_config['joint_positions'])
+        self.stabilization_time = env_config['stabilization_time']
+        self.episode_time_limit = env_config['episode_time_limit']
 
         # Initialize setpoint variables
         self.current_setpoint = np.zeros(12)  # Store the current setpoint (position, velocity, orientation, angular velocity)
@@ -562,7 +604,7 @@ def evaluate_agent(env, agent):
 if __name__ == "__main__":
     env = GridWorldEnv()
     # agent = Agent(state_size=12, action_size=4)
-    agent = Agent(state_size=12, action_size=2)
+    agent = Agent(state_size, action_size)
 
     continuous_learning(env, agent)
     # Train the agent
