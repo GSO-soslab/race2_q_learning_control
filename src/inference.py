@@ -134,7 +134,7 @@ if __name__ == '__main__':
         rospy.Service('/enable_inference', SetBool, toggle_inference_service)
         
         # Path to the saved model
-        model_path = rospy.get_param('~model_path', 'dqn_model_2024-11-08_17-31-06.pth')
+        model_path = rospy.get_param('~model_path', 'dqn_model_w1-w2-w4is3-w6.pth')
         
         # Run the inference indefinitely
         run_inference(model_path)

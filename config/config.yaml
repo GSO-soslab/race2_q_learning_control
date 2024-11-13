@@ -7,7 +7,7 @@ agent:
   buffer_size: 20000  # Maximum size of the replay buffer
   batch_size: 32      # Number of experiences sampled from replay buffer for training
   gamma: 0.95         # Discount factor for future rewards
-  learning_rate: 0.0001  # Learning rate for the optimizer
+  learning_rate: 0.00001  # Learning rate for the optimizer
   tau: 0.05           # Soft update factor for target network
   epsilon_initial: 1.0  # Initial exploration rate for epsilon-greedy policy
   epsilon_decay: 0.991   # Rate at which epsilon decays per episode
@@ -30,15 +30,15 @@ environment:
 
 reward_function:
   w1: 1.0              # Weight for performance error
-  w2: 3.0              # Weight for servo smoothness penalty
-  w3: 0.0              # Weight for thruster usage penalty
+  w2: 2.5              # Weight for servo smoothness penalty
+  w3: 0.0              # Weight for thruster usage penalty (keep zero)
   w4: 2.0              # Weight for thruster smoothness penalty
-  w5: 0.0              # Weight for servo angle penalty
+  w5: 0.0              # Weight for servo angle penalty (keep zero)
   w6: 1.0              # Weight for thruster delta reward
   state_error_weights: [0.0, 0.0, 0.5, 0.5, 0.5, 0.0, 0.5, 0.5, 1.0, 0.0, 0.0, 0.0]  # Weights for individual state errors
 
 training:
-  max_episodes: 600    # Maximum episodes for training
+  max_episodes: 3000    # Maximum episodes for training
   max_t: 1000          # Maximum steps per episode
   target_avg_reward: 20  # Target average reward for early stopping
   plot_interval: 10    # Interval for updating plots during training

@@ -199,7 +199,7 @@ class GridWorldEnv:
 
 
         # ROS node initialization
-        # rospy.init_node('underwater_vehicle_env', anonymous=True)
+        rospy.init_node('underwater_vehicle_env', anonymous=True)
 
         self.thruster_action_pub = rospy.Publisher('/thruster_action', Int32MultiArray, queue_size=10)
 
@@ -362,17 +362,26 @@ class GridWorldEnv:
         ])
         thruster_usage_penalty = np.sum(np.abs(u_t))
 
+        # # Thruster smoothness penalty
+        # if len(self.u_prev) > 0:
+        #     thruster_smoothness_penalty = np.linalg.norm(u_t - np.average(self.u_prev, axis=0))
+        #     self.u_prev = np.vstack((self.u_prev[1:], u_t))
+
         # Thruster smoothness penalty
-        if len(self.u_prev) > 0:
+        if len(self.u_prev) > 1:  # Check if there’s enough history to calculate smoothness
             thruster_smoothness_penalty = np.linalg.norm(u_t - np.average(self.u_prev, axis=0))
-            self.u_prev = np.vstack((self.u_prev[1:], u_t))
+        else:
+            thruster_smoothness_penalty = np.linalg.norm(u_t)  # Initial penalty based on u_t
+
+        # Update self.u_prev to store the history
+        self.u_prev = np.vstack((self.u_prev[1:], u_t)) if len(self.u_prev) > 1 else np.vstack((self.u_prev, u_t))
 
         # Thruster delta reward
         thruster_delta_reward = np.linalg.norm(u_t - self.u_prev[-2])
 
         # Servo angle penalty
         servo_angle_penalty = np.linalg.norm(self.joint_angles)
-
+        print("Smoothness penalty:", thruster_smoothness_penalty)
         # Total reward
         reward = - (
             w1 * performance_error +
