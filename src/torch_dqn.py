@@ -199,7 +199,7 @@ class GridWorldEnv:
 
 
         # ROS node initialization
-        # rospy.init_node('underwater_vehicle_env', anonymous=True)
+        rospy.init_node('underwater_vehicle_env', anonymous=True)
 
         self.thruster_action_pub = rospy.Publisher('/thruster_action', Int32MultiArray, queue_size=10)
 

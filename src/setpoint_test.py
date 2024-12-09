@@ -16,11 +16,41 @@ def publisher():
     frame_id_value = "race2/world_ned"
     control_mode_value = "hold_dof"
 
-    # Desired set points
-    position_value = Vector3(0.0, 0.0, 5.0)
-    orientation_value = Vector3(0.0, 0.0, -0.6)
-    velocity_value = Vector3(0.25, 0.0, 0.0)
-    angular_rate_value = Vector3(0.0, 0.0, 0.0)
+    # # Desired set points
+    # position_value = Vector3(0.0, 0.0, 5.0) # x, y, z
+    # orientation_value = Vector3(0.0, 0.0, -0.6) # phi, theta, psi
+    # velocity_value = Vector3(0.25, 0.0, 0.0) # u, v, w
+    # angular_rate_value = Vector3(0.0, 0.0, 0.0) # p, q, r
+
+    # # desired setpoint set1
+    # position_value = Vector3(0.0, 0.0, 5.0) # x, y, z
+    # orientation_value = Vector3(0.0, 0.0, 0.0) # phi, theta, psi
+    # velocity_value = Vector3(0.25, 0.0, 0.0) # u, v, w
+    # angular_rate_value = Vector3(0.0, 0.0, 0.0) # p, q, r
+
+    # # desired setpoint set2
+    # position_value = Vector3(0.0, 0.0, 3.0) # x, y, z
+    # orientation_value = Vector3(0.0, 0.0, -1.57) # phi, theta, psi
+    # velocity_value = Vector3(0.25, 0.0, 0.0) # u, v, w
+    # angular_rate_value = Vector3(0.0, 0.0, 0.0) # p, q, r
+
+    # # desired setpoint set3
+    # position_value = Vector3(0.0, 0.0, 3.0) # x, y, z
+    # orientation_value = Vector3(0.0, 0.0, 0.0) # phi, theta, psi
+    # velocity_value = Vector3(-0.25, 0.0, 0.0) # u, v, w
+    # angular_rate_value = Vector3(0.0, 0.0, 0.0) # p, q, r
+
+    # # desired setpoint set4
+    # position_value = Vector3(0.0, 0.0, 5.0) # x, y, z
+    # orientation_value = Vector3(0.0, 0.0, 1.57) # phi, theta, psi
+    # velocity_value = Vector3(-0.25, 0.0, 0.0) # u, v, w
+    # angular_rate_value = Vector3(0.0, 0.0, 0.0) # p, q, r
+
+    # # desired setpoint set5
+    # position_value = Vector3(0.0, 0.0, 5.0) # x, y, z
+    # orientation_value = Vector3(0.0, 0.0, 0.0) # phi, theta, psi
+    # velocity_value = Vector3(0.25, 0.0, 0.0) # u, v, w
+    # angular_rate_value = Vector3(0.0, 0.0, 0.0) # p, q, r
 
     # Reset values
     reset_position = Vector3(0.0, 0.0, 0.0)
@@ -57,9 +87,50 @@ def publisher():
     rospy.loginfo("Publishing reset values for %d seconds", reset1_duration)
     publish_values(reset_position, reset_orientation, reset_velocity, reset_angular_rate, reset1_duration)
 
-    # Episode 2: Publish desired set points
-    rospy.loginfo("Publishing set point values for %d seconds", set_point_duration)
-    publish_values(position_value, orientation_value, velocity_value, angular_rate_value, set_point_duration)
+    # # Episode 2: Publish desired set points
+    # rospy.loginfo("Publishing set point values for %d seconds", set_point_duration)
+    # publish_values(position_value, orientation_value, velocity_value, angular_rate_value, set_point_duration)
+
+    # Episode 2: Publish desired set points in sequence
+    rospy.loginfo("Publishing setpoint 1 for 100 seconds")
+    ##############################
+    #     _  _
+    #    |    | 
+    ##############################
+    publish_values(Vector3(0.0, 0.0, 5.0), Vector3(0.0, 0.0, 0.0), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 100)
+
+
+    rospy.loginfo("Publishing setpoint 2 for 100 seconds")
+    ##############################
+    # __
+    #   |
+    # __|  
+    ##############################
+    publish_values(Vector3(0.0, 0.0, 3.0), Vector3(0.0, 0.0, 1.57), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 100)
+
+
+    rospy.loginfo("Publishing setpoint 3 for 200 seconds")
+    ##############################
+    # |    |
+    #  _  _
+    ##############################
+    publish_values(Vector3(0.0, 0.0, 3.0), Vector3(0.0, 0.0, 0.0), Vector3(-0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 200)
+
+
+    rospy.loginfo("Publishing setpoint 4 for 100 seconds")
+    ##############################
+    #   __
+    # |  
+    # | __
+    ##############################
+    publish_values(Vector3(0.0, 0.0, 5.0), Vector3(0.0, 0.0, 1.57), Vector3(-0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 100)
+
+    rospy.loginfo("Publishing setpoint 5 for 100 seconds")
+    ##############################
+    #  _  _
+    # |    | 
+    ##############################
+    publish_values(Vector3(0.0, 0.0, 5.0), Vector3(0.0, 0.0, 0.0), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 100)
 
     # Episode 3: Publish reset values again
     rospy.loginfo("Publishing reset values for %d seconds", reset2_duration)
