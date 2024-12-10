@@ -32,7 +32,7 @@ reward_function:
   w1: 2.0              # Weight for performance error
   w2: 2.0              # Weight for servo smoothness penalty
   w3: 0.0              # Weight for thruster usage penalty (keep zero)
-  w4: 0.0              # Weight for thruster smoothness penalty
+  w4: 2.0              # Weight for thruster smoothness penalty
   w5: 0.0              # Weight for servo angle penalty (keep zero)
   w6: 0.0              # Weight for thruster delta reward
   state_error_weights: [0.0, 0.0, 0.5, 1.5, 0.5, 0.0, 0.5, 0.5, 1.5, 0.0, 0.0, 0.0]  # Weights for individual state errors
