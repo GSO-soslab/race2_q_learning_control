@@ -210,6 +210,9 @@ class GridWorldEnv:
         # Service for enabling/disabling the policy
         rospy.Service('/toggle_policy', SetBool, self.toggle_policy_service)
 
+        # Service for saving the policy manually
+        rospy.Service('/save_policy', SetBool, self.save_policy_service)
+
         rospy.Subscriber('/race2/controller/process/error', ControlProcess, self.update_current_error)
         rospy.Subscriber('/race2/control/thruster/heave_bow', Float64, self.update_thrust_heave_bow)
         rospy.Subscriber('/race2/control/thruster/surge_port', Float64, self.update_thrust_surge_port)
@@ -218,6 +221,12 @@ class GridWorldEnv:
         rospy.Subscriber('/race2/control/servos/joint_states', JointState, self.update_joint_states)
 
         self.reset()
+
+    # Service callback to save the policy manually
+    def save_policy_service(self, request):
+        """Service callback to save the policy manually."""
+        self.stop_training = True  # Set training to stop
+        return SetBoolResponse(success=True, message="Training stopped, policy will be saved.")
 
     def toggle_policy_service(self, request):
         """Service callback to enable/disable policy use."""
@@ -436,7 +445,9 @@ def continuous_learning(env, agent, config):
     # Training Loop
     while episode_count < max_episodes and not rospy.is_shutdown():
         if env.stop_training:
-            rospy.loginfo("Training has been stopped.")
+            # rospy.loginfo("Training has been stopped.")
+            rospy.loginfo("Service called: Saving policy and stopping training.")
+            save_model(agent)  # Save the trained model
             break  # Exit the training loop if training is stopped
 
         episode_count += 1
@@ -499,6 +510,10 @@ def continuous_learning(env, agent, config):
                 print(f"Stopping training as average reward over last 10 episodes is {avg_reward_recent:.2f} (>= {target_avg_reward})")
                 break
 
+    # Save the model if the loop was exited due to max episodes
+    if not env.stop_training:
+        save_model(agent)
+    
     # After training, set epsilon to 0 to use the greedy policy
     epsilon = 0.0
 
