@@ -62,7 +62,7 @@ def publisher():
     reset1_duration = rospy.get_param("~reset1_duration", 10)  # Default 10 seconds
     set_point_duration = rospy.get_param("~set_point_duration", 300)  # Default 300 seconds
     reset2_duration = rospy.get_param("~reset2_duration", 10)  # Default 10 seconds
-    rate_hz = rospy.get_param("~rate_hz", 10)  # Default 10 Hz
+    rate_hz = rospy.get_param("~rate_hz", 1)  # Default 10 Hz
 
     rate = rospy.Rate(rate_hz)
 
@@ -97,40 +97,60 @@ def publisher():
     #     _  _
     #    |    | 
     ##############################
-    publish_values(Vector3(0.0, 0.0, 5.0), Vector3(0.0, 0.0, 0.0), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 100)
+    publish_values(Vector3(0.0, 0.0, 5.0), Vector3(0.0, 0.0, 0.0), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 30)
 
 
-    rospy.loginfo("Publishing setpoint 2 for 100 seconds")
+
+
+    rospy.loginfo("Publishing setpoint 2 for 30 seconds")
     ##############################
     # __
     #   |
     # __|  
     ##############################
-    publish_values(Vector3(0.0, 0.0, 3.0), Vector3(0.0, 0.0, 1.57), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 100)
+    publish_values(Vector3(0.0, 0.0, 3.0), Vector3(0.0, 0.0, 1.57), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 30)
 
 
-    rospy.loginfo("Publishing setpoint 3 for 200 seconds")
+
+
+    rospy.loginfo("Publishing setpoint 3 for 30 seconds")
     ##############################
     # |    |
     #  _  _
     ##############################
-    publish_values(Vector3(0.0, 0.0, 3.0), Vector3(0.0, 0.0, 0.0), Vector3(-0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 200)
+    publish_values(Vector3(0.0, 0.0, 3.0), Vector3(0.0, 0.0, 3.14), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 30)
 
 
-    rospy.loginfo("Publishing setpoint 4 for 100 seconds")
+
+
+    rospy.loginfo("Publishing setpoint 3/1 for 30 seconds")
+    
+    publish_values(Vector3(0.0, 0.0, 3.0), Vector3(0.0, 0.0, 3.14), Vector3(-0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 30)
+
+
+    rospy.loginfo("Publishing setpoint 3/2 for 30 seconds")
+    
+    publish_values(Vector3(0.0, 0.0, 3.0), Vector3(0.0, 0.0, 3.14), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 30)
+
+
+    rospy.loginfo("Publishing setpoint 4 for 30 seconds")
     ##############################
     #   __
     # |  
     # | __
     ##############################
-    publish_values(Vector3(0.0, 0.0, 5.0), Vector3(0.0, 0.0, 1.57), Vector3(-0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 100)
+    publish_values(Vector3(0.0, 0.0, 5.0), Vector3(0.0, 0.0, -1.57), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 30)
 
-    rospy.loginfo("Publishing setpoint 5 for 100 seconds")
+
+
+    rospy.loginfo("Publishing setpoint 5 for 50 seconds")
     ##############################
     #  _  _
     # |    | 
     ##############################
-    publish_values(Vector3(0.0, 0.0, 5.0), Vector3(0.0, 0.0, 0.0), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 100)
+    publish_values(Vector3(0.0, 0.0, 5.0), Vector3(0.0, 0.0, 0.0), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 50)
+
+
 
     # Episode 3: Publish reset values again
     rospy.loginfo("Publishing reset values for %d seconds", reset2_duration)

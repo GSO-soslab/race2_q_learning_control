@@ -15,6 +15,10 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64, Int32MultiArray
 from std_srvs.srv import SetBool, SetBoolResponse
 
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+
 # Set the path to the config file in the parent config directory
 config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.yaml')
 
@@ -79,16 +83,19 @@ class Agent:
         # Initialize the Q-network and the target network
         hidden_layers = tuple(config['qnetwork']['hidden_layers'])
         print("Hidden layers:", hidden_layers) 
-        self.qnetwork = QNetwork(state_size, action_size, hidden_layers)
-        self.target_network = QNetwork(state_size, action_size, hidden_layers)
+        # self.qnetwork = QNetwork(state_size, action_size, hidden_layers) #policy network
+        # self.target_network = QNetwork(state_size, action_size, hidden_layers)
 
-        # Apply weights initialization to both networks
-        self.qnetwork.apply(self.weights_init)
-        self.target_network.apply(self.weights_init)
+        self.qnetwork = QNetwork(state_size, action_size, hidden_layers).to(device)  # Move Q-network to GPU
+        self.target_network = QNetwork(state_size, action_size, hidden_layers).to(device)  # Move target network to GPU
+
+        # # Apply weights initialization to both networks
+        # self.qnetwork.apply(self.weights_init)
+        # self.target_network.apply(self.weights_init)
 
         # Initialize the optimizer for the Q-network
         lr = config['agent']['learning_rate']
-        self.optimizer = optim.Adam(self.qnetwork.parameters(), lr=lr)
+        self.optimizer = optim.AdamW(self.qnetwork.parameters(), lr=lr)
 
         # Replay buffer
         buffer_size = config['agent']['buffer_size']
@@ -110,7 +117,8 @@ class Agent:
 
     def act(self, state, epsilon=0.1):
         if random.random() > epsilon:
-            state = torch.FloatTensor(state).unsqueeze(0)
+            # state = torch.FloatTensor(state).unsqueeze(0)
+            state = torch.FloatTensor(state).unsqueeze(0).to(device)  # Move state tensor to GPU
             with torch.no_grad():
                 action_values = self.qnetwork(state)
             action_index = torch.argmax(action_values).item()
@@ -138,11 +146,17 @@ class Agent:
 
         # Convert to tensors
         batch_size = len(states)
-        states = torch.FloatTensor(np.array(states))
-        actions = torch.LongTensor(np.array(actions)).view(-1, 1)
-        rewards = torch.FloatTensor(np.array(rewards)).view(-1, 1)
-        next_states = torch.FloatTensor(np.array(next_states))
-        dones = torch.FloatTensor(np.array(dones)).view(-1, 1)
+        # states = torch.FloatTensor(np.array(states))
+        # actions = torch.LongTensor(np.array(actions)).view(-1, 1)
+        # rewards = torch.FloatTensor(np.array(rewards)).view(-1, 1)
+        # next_states = torch.FloatTensor(np.array(next_states))
+        # dones = torch.FloatTensor(np.array(dones)).view(-1, 1)
+
+        states = torch.FloatTensor(np.array(states)).to(device) 
+        actions = torch.LongTensor(np.array(actions)).view(-1, 1).to(device) 
+        rewards = torch.FloatTensor(np.array(rewards)).view(-1, 1).to(device) 
+        next_states = torch.FloatTensor(np.array(next_states)).to(device)  
+        dones = torch.FloatTensor(np.array(dones)).view(-1, 1).to(device) 
 
         # Compute current Q-values
         q_values = self.qnetwork(states)
@@ -186,20 +200,22 @@ class GridWorldEnv:
         self.max_episode_duration = config['environment']['max_episode_duration']
         self.thruster_history_length = config['environment']['thruster_history_length']
         self.servo_history_length = config['environment']['servo_history_length']
+        self.sampling_time = config['environment']['sampling_time']
         self.action_mapping = {int(k): v for k, v in config['environment']['action_mapping'].items()}
+        
 
         # Retrieve servo and thruster size from config
-        servo_joints_size = config['environment']['servo_joints_size']
+        self.servo_joints_size = config['environment']['servo_joints_size']
         thruster_size = config['environment']['thruster_size']
 
         # Initialize joint positions for servos
-        self.joint_angles = np.zeros(servo_joints_size)
-        self.joint_positions_history = np.zeros((self.servo_history_length, servo_joints_size))
+        self.joint_angles = np.zeros(self.servo_joints_size)
+        self.joint_positions_history = np.zeros((self.servo_history_length, self.servo_joints_size))
         self.u_prev = np.zeros((self.thruster_history_length, thruster_size))
 
 
         # ROS node initialization
-        # rospy.init_node('underwater_vehicle_env', anonymous=True)
+        rospy.init_node('underwater_vehicle_env', anonymous=True)
 
         self.thruster_action_pub = rospy.Publisher('/thruster_action', Int32MultiArray, queue_size=10)
 
@@ -214,9 +230,9 @@ class GridWorldEnv:
         rospy.Service('/save_policy', SetBool, self.save_policy_service)
 
         rospy.Subscriber('/race2/controller/process/error', ControlProcess, self.update_current_error)
-        rospy.Subscriber('/race2/control/thruster/heave_bow', Float64, self.update_thrust_heave_bow)
+        # rospy.Subscriber('/race2/control/thruster/heave_bow', Float64, self.update_thrust_heave_bow)
         rospy.Subscriber('/race2/control/thruster/surge_port', Float64, self.update_thrust_surge_port)
-        rospy.Subscriber('/race2/control/thruster/sway_stern', Float64, self.update_thrust_sway_stern)
+        # rospy.Subscriber('/race2/control/thruster/sway_stern', Float64, self.update_thrust_sway_stern)
         rospy.Subscriber('/race2/control/thruster/surge_starboard', Float64, self.update_thrust_surge_starboard)
         rospy.Subscriber('/race2/control/servos/joint_states', JointState, self.update_joint_states)
 
@@ -256,11 +272,11 @@ class GridWorldEnv:
     def update_thrust_surge_starboard(self, data):
         self.thrust_surge_starboard = data.data
 
-    def update_thrust_heave_bow(self, data):
-        self.thrust_heave_bow = data.data
+    # def update_thrust_heave_bow(self, data):
+    #     self.thrust_heave_bow = data.data
 
-    def update_thrust_sway_stern(self, data):
-        self.thrust_sway_stern = data.data
+    # def update_thrust_sway_stern(self, data):
+    #     self.thrust_sway_stern = data.data
 
     def step(self, action_index):
         if not self.use_policy:
@@ -278,13 +294,13 @@ class GridWorldEnv:
         # Publish the action array
         self.thruster_action_pub.publish(thruster_command)
 
-        rospy.sleep(0.208)
+        rospy.sleep(self.sampling_time) 
         current_time = rospy.get_time()
         elapsed_time_total = current_time - self.start_time
 
         # Determine if the episode has ended
         done = elapsed_time_total > self.max_episode_duration
-        done = True  # Assume episode ends after one action
+        # done = True  # Assume episode ends after one action
         if done:
             self._episode_ended = True
 
@@ -307,9 +323,10 @@ class GridWorldEnv:
         self.start_time = rospy.get_time()
 
         # Initialize joint angles randomly or to a specific value
-        initial_joint_angles = np.random.uniform(low=-np.pi, high=np.pi, size=2)
-        self.joint_angles = initial_joint_angles
-
+        # initial_joint_angles = np.random.uniform(low=-np.pi, high=np.pi, size=2)
+        # self.joint_angles = initial_joint_angles
+        # self.joint_angles = np.zeros(self.servo_joints_size)  
+              
         # Initialize joint_positions_history with the initial joint angles
         self.joint_positions_history = np.full(self.joint_positions_history.shape, 0)
 
@@ -364,10 +381,10 @@ class GridWorldEnv:
 
         # Thruster usage penalty
         u_t = np.array([
-            self.thrust_heave_bow,
+            # self.thrust_heave_bow,
             self.thrust_surge_port,
-            self.thrust_surge_starboard,
-            self.thrust_sway_stern
+            self.thrust_surge_starboard
+            # self.thrust_sway_stern
         ])
         thruster_usage_penalty = np.sum(np.abs(u_t))
 
@@ -390,9 +407,9 @@ class GridWorldEnv:
 
         # Servo angle penalty
         servo_angle_penalty = np.linalg.norm(self.joint_angles)
-        print("Smoothness penalty:", thruster_smoothness_penalty)
+        # print("Smoothness penalty:", thruster_smoothness_penalty)
         # Total reward
-        reward = - (
+        reward =   - (
             w1 * performance_error +
             w2 * servo_smoothness_penalty +
             w3 * thruster_usage_penalty +
@@ -400,8 +417,150 @@ class GridWorldEnv:
             w5 * servo_angle_penalty +
             w6 * thruster_delta_reward
         )
+        
+        print(f"Performance Error Contribution: {-w1 * performance_error}")
+        print(f"Servo Smoothness Penalty Contribution: {-w2 * servo_smoothness_penalty}")
+        # print(f"Thruster Usage Penalty Contribution: {-w3 * thruster_usage_penalty}")
+        print(f"Thruster Smoothness Penalty Contribution: {-w4 * thruster_smoothness_penalty}")
+        # print(f"Servo Angle Penalty Contribution: {-w5 * servo_angle_penalty}")
+        # print(f"Thruster Delta Reward Contribution: {-w6 * thruster_delta_reward}")
+
         return reward
 
+# episode based learning 1st version
+# def continuous_learning(env, agent, config):
+#     max_episodes = config['training']['max_episodes']
+#     max_t = config['training']['max_t']
+#     target_avg_reward = config['training']['target_avg_reward']
+#     epsilon = config['agent']['epsilon_initial']
+#     epsilon_decay = config['agent']['epsilon_decay']
+#     epsilon_min = config['agent']['epsilon_min']
+
+#     episode_count = 0
+#     rate = rospy.Rate(50)  # Set a rate (e.g., 10 Hz)
+
+#     # Initialize plotting
+#     plt.ion()
+#     fig, ax = plt.subplots(3, 1, figsize=(10, 12))
+
+#     reward_history = []
+#     q_value_history = []
+#     loss_history = []
+#     episodes = []
+
+#     # Set up the plots
+#     ax[0].set_title('Total Reward per Episode')
+#     ax[0].set_xlabel('Episode')
+#     ax[0].set_ylabel('Total Reward')
+#     reward_line, = ax[0].plot([], [], label='Reward')
+#     ax[0].legend()
+
+#     ax[1].set_title('Max Q-value per Episode')
+#     ax[1].set_xlabel('Episode')
+#     ax[1].set_ylabel('Max Q-value')
+#     q_value_line, = ax[1].plot([], [], label='Max Q-value', color='orange')
+#     ax[1].legend()
+
+#     ax[2].set_title('Average Loss per Episode')
+#     ax[2].set_xlabel('Episode')
+#     ax[2].set_ylabel('Average Loss')
+#     loss_line, = ax[2].plot([], [], label='Loss', color='green')
+#     ax[2].legend()
+
+#     # Training Loop
+#     while episode_count < max_episodes and not rospy.is_shutdown():
+#         if env.stop_training:
+#             # rospy.loginfo("Training has been stopped.")
+#             rospy.loginfo("Service called: Saving policy and stopping training.")
+#             save_model(agent)  # Save the trained model
+#             break  # Exit the training loop if training is stopped
+
+#         episode_count += 1
+#         state = env.reset()  # Reset environment to get initial state
+#         score = 0
+#         max_q_value = -float('inf')  # Initialize max Q-value for this episode
+#         episode_loss = 0.0  # Initialize episode loss
+#         loss_steps = 0  # Number of steps where learning occurred
+
+#         for t in range(max_t):  # Limit each episode to max_t steps
+#             action_index = agent.act(state, epsilon)
+#             next_state, reward, done, _ = env.step(action_index)
+#             loss = agent.step(state, action_index, reward, next_state, done)
+#             state = next_state
+
+#             score += reward
+
+#             # Get Q-values for the current state
+#             state_tensor = torch.FloatTensor(state).unsqueeze(0)
+#             with torch.no_grad():
+#                 q_values = agent.qnetwork(state_tensor)
+#             current_max_q = q_values.max().item()
+#             if current_max_q > max_q_value:
+#                 max_q_value = current_max_q  # Update max Q-value for this episode
+
+#             # Accumulate loss if learning occurred
+#             if loss is not None:
+#                 episode_loss += loss
+#                 loss_steps += 1
+
+#             if done:
+#                 break
+
+#             # Sleep to maintain the loop rate
+#             rate.sleep()
+
+#         # Decay epsilon after each episode
+#         epsilon = max(epsilon_min, epsilon_decay * epsilon)
+
+#         # Calculate average loss for the episode
+#         average_loss = episode_loss / loss_steps if loss_steps > 0 else 0.0
+
+#         # Append data for plotting
+#         episodes.append(episode_count)
+#         reward_history.append(score)
+#         q_value_history.append(max_q_value)
+#         loss_history.append(average_loss)
+
+#         # Update the plots
+#         update_plots(ax, episodes, reward_history, q_value_history, loss_history,
+#                      reward_line, q_value_line, loss_line)
+
+#         # Optionally, print the episode score and loss for monitoring
+#         print(f"Episode {episode_count}: Score: {score:.2f}, Max Q-value: {max_q_value:.2f}, Average Loss: {average_loss:.4f}, Epsilon: {epsilon:.3f}")
+
+#         # Check if average reward over the last N episodes meets the target
+#         if target_avg_reward is not None and len(reward_history) >= 10:
+#             avg_reward_recent = np.mean(reward_history[-10:])
+#             if avg_reward_recent >= target_avg_reward:
+#                 print(f"Stopping training as average reward over last 10 episodes is {avg_reward_recent:.2f} (>= {target_avg_reward})")
+#                 break
+
+#     # Save the model if the loop was exited due to max episodes
+#     if not env.stop_training:
+#         save_model(agent)
+    
+#     # After training, set epsilon to 0 to use the greedy policy
+#     epsilon = 0.0
+
+#     # Save the trained model
+#     save_model(agent)
+
+#     # Now, enter an infinite loop where the agent continues to act using the learned policy
+#     print("Training complete. Continuing to run with the learned policy.")
+#     while not rospy.is_shutdown():
+#         state = env.reset()
+#         done = False
+#         total_reward = 0
+#         while not done and not rospy.is_shutdown():
+#             action_index = agent.act(state, epsilon=0.0)  # Use greedy policy
+#             next_state, reward, done, _ = env.step(action_index)
+#             state = next_state
+#             total_reward += reward
+
+#             # Sleep to maintain the loop rate
+#             rate.sleep()
+
+#         print(f"Episode completed with total reward: {total_reward}")
 
 def continuous_learning(env, agent, config):
     max_episodes = config['training']['max_episodes']
@@ -412,7 +571,7 @@ def continuous_learning(env, agent, config):
     epsilon_min = config['agent']['epsilon_min']
 
     episode_count = 0
-    rate = rospy.Rate(10)  # Set a rate (e.g., 10 Hz)
+    rate = rospy.Rate(50)  # e.g., 50 Hz loop rate
 
     # Initialize plotting
     plt.ion()
@@ -445,35 +604,55 @@ def continuous_learning(env, agent, config):
     # Training Loop
     while episode_count < max_episodes and not rospy.is_shutdown():
         if env.stop_training:
-            # rospy.loginfo("Training has been stopped.")
             rospy.loginfo("Service called: Saving policy and stopping training.")
             save_model(agent)  # Save the trained model
             break  # Exit the training loop if training is stopped
 
         episode_count += 1
         state = env.reset()  # Reset environment to get initial state
-        score = 0
-        max_q_value = -float('inf')  # Initialize max Q-value for this episode
-        episode_loss = 0.0  # Initialize episode loss
-        loss_steps = 0  # Number of steps where learning occurred
 
-        for t in range(max_t):  # Limit each episode to max_t steps
+        # Track episode metrics (not directly used in training)
+        score = 0
+        total_reward = 0 
+        step_count = 0    
+        max_q_value = float('-inf')
+        episode_loss = 0.0
+        loss_steps = 0
+
+        for episode_t in range(max_t):
+            # 1. Select an action according to current policy (with exploration)
             action_index = agent.act(state, epsilon)
+
+            # 2. Execute the action in the environment
             next_state, reward, done, _ = env.step(action_index)
+
+            # 3. Store transition and (optionally) do a batch update
+            #    agent.step(...) internally:
+            #    - pushes (state, action, reward, next_state, done) into replay buffer
+            #    - if memory is large enough and at the right interval, samples a batch
+            #      and performs a training step
             loss = agent.step(state, action_index, reward, next_state, done)
+
+            # 4. Move to the next state
             state = next_state
 
-            score += reward
+            # 5. Accumulate reward for logging (episode-level, not used for training)
+            # score += reward
 
-            # Get Q-values for the current state
-            state_tensor = torch.FloatTensor(state).unsqueeze(0)
+            total_reward += reward
+            step_count += 1
+            
+            average_reward = total_reward / step_count if step_count > 0 else 0.0
+
+            # 6. Log the max Q-value for debugging/analysis
+            # state_tensor = torch.FloatTensor(state).unsqueeze(0)
+            state_tensor = torch.FloatTensor(state).unsqueeze(0).to(device)
             with torch.no_grad():
                 q_values = agent.qnetwork(state_tensor)
             current_max_q = q_values.max().item()
-            if current_max_q > max_q_value:
-                max_q_value = current_max_q  # Update max Q-value for this episode
+            max_q_value = max(max_q_value, current_max_q)
 
-            # Accumulate loss if learning occurred
+            # 7. Track loss if a batch update occurred in agent.step(...)
             if loss is not None:
                 episode_loss += loss
                 loss_steps += 1
@@ -481,58 +660,57 @@ def continuous_learning(env, agent, config):
             if done:
                 break
 
-            # Sleep to maintain the loop rate
-            rate.sleep()
+            rate.sleep()  # Sleep to maintain loop rate
 
-        # Decay epsilon after each episode
+        # 8. Decay epsilon after each episode
         epsilon = max(epsilon_min, epsilon_decay * epsilon)
 
-        # Calculate average loss for the episode
+        # 9. Calculate average loss for the episode
         average_loss = episode_loss / loss_steps if loss_steps > 0 else 0.0
 
-        # Append data for plotting
+        # 10. Store metrics for plotting
         episodes.append(episode_count)
-        reward_history.append(score)
+        # reward_history.append(score)
+        reward_history.append(average_reward)
         q_value_history.append(max_q_value)
         loss_history.append(average_loss)
 
-        # Update the plots
+        # 11. Update the plots
         update_plots(ax, episodes, reward_history, q_value_history, loss_history,
                      reward_line, q_value_line, loss_line)
 
-        # Optionally, print the episode score and loss for monitoring
-        print(f"Episode {episode_count}: Score: {score:.2f}, Max Q-value: {max_q_value:.2f}, Average Loss: {average_loss:.4f}, Epsilon: {epsilon:.3f}")
+        # 12. Print status for monitoring
+        print(f"Episode {episode_count}: Score: {score:.2f}, Max Q-value: {max_q_value:.2f}, "
+              f"Average Loss: {average_loss:.4f}, Epsilon: {epsilon:.3f}")
 
-        # Check if average reward over the last N episodes meets the target
+        # 13. Check if average reward meets the target
         if target_avg_reward is not None and len(reward_history) >= 10:
             avg_reward_recent = np.mean(reward_history[-10:])
             if avg_reward_recent >= target_avg_reward:
-                print(f"Stopping training as average reward over last 10 episodes is {avg_reward_recent:.2f} (>= {target_avg_reward})")
+                print(f"Stopping training as average reward over last 10 episodes is "
+                      f"{avg_reward_recent:.2f} (>= {target_avg_reward})")
                 break
 
-    # Save the model if the loop was exited due to max episodes
+    # Save the model after training loop is done
     if not env.stop_training:
         save_model(agent)
-    
+
     # After training, set epsilon to 0 to use the greedy policy
     epsilon = 0.0
-
-    # Save the trained model
     save_model(agent)
-
-    # Now, enter an infinite loop where the agent continues to act using the learned policy
     print("Training complete. Continuing to run with the learned policy.")
+
+    # Run indefinitely using the learned (greedy) policy
     while not rospy.is_shutdown():
         state = env.reset()
         done = False
         total_reward = 0
         while not done and not rospy.is_shutdown():
-            action_index = agent.act(state, epsilon=0.0)  # Use greedy policy
+            # Greedy action (no exploration)
+            action_index = agent.act(state, epsilon=0.0)
             next_state, reward, done, _ = env.step(action_index)
             state = next_state
             total_reward += reward
-
-            # Sleep to maintain the loop rate
             rate.sleep()
 
         print(f"Episode completed with total reward: {total_reward}")
@@ -559,7 +737,7 @@ def update_plots(ax, episodes, reward_history, q_value_history, loss_history,
     ax[2].autoscale_view()
 
     plt.draw()
-    plt.pause(0.01)  # Pause to update the plots
+    plt.pause(0.2)  # Pause to update the plots
 
 
 def save_model(agent, filename_prefix='dqn_model'):
@@ -572,22 +750,22 @@ def save_model(agent, filename_prefix='dqn_model'):
     print(f"Model saved to {filename}")
 
 
-def evaluate_agent(env, agent, config):
-    num_episodes = config['evaluation']['num_episodes']
-    total_scores = []
-    for episode in range(num_episodes):
-        state = env.reset()
-        score = 0
-        done = False
-        while not done and not rospy.is_shutdown():
-            action_index = agent.act(state, epsilon=0.0)  # Greedy policy
-            next_state, reward, done, _ = env.step(action_index)
-            state = next_state
-            score += reward
-        total_scores.append(score)
-        print(f"Evaluation Episode {episode + 1}: Score: {score:.2f}")
-    avg_score = np.mean(total_scores)
-    print(f"Average Evaluation Score over {num_episodes} episodes: {avg_score:.2f}")
+# def evaluate_agent(env, agent, config):
+#     num_episodes = config['evaluation']['num_episodes']
+#     total_scores = []
+#     for episode in range(num_episodes):
+#         state = env.reset()
+#         score = 0
+#         done = False
+#         while not done and not rospy.is_shutdown():
+#             action_index = agent.act(state, epsilon=0.0)  # Greedy policy
+#             next_state, reward, done, _ = env.step(action_index)
+#             state = next_state
+#             score += reward
+#         total_scores.append(score)
+#         print(f"Evaluation Episode {episode + 1}: Score: {score:.2f}")
+#     avg_score = np.mean(total_scores)
+#     print(f"Average Evaluation Score over {num_episodes} episodes: {avg_score:.2f}")
 
 
 if __name__ == '__main__':

@@ -83,7 +83,7 @@ def run_inference(model_path):
     # Publisher for the thruster action
     thruster_action_pub = rospy.Publisher('/thruster_action', Int32MultiArray, queue_size=10)
 
-    rate = rospy.Rate(10)  # Define a loop rate (e.g., 10 Hz)
+    rate = rospy.Rate(5)  # Define a loop rate (e.g., 10 Hz)
 
     global inference_enabled
     episode = 0  # To keep track of the number of episodes
@@ -134,8 +134,8 @@ if __name__ == '__main__':
         rospy.Service('/enable_inference', SetBool, toggle_inference_service)
         
         # Path to the saved model
-        model_path = rospy.get_param('~model_path', 'dqn_model_2024-12-13_16-04-20.pth')
-        
+        model_path = rospy.get_param('~model_path', 'dqn_model_2024-12-29_18-14-57.pth')
+
         # Run the inference indefinitely
         run_inference(model_path)
         
