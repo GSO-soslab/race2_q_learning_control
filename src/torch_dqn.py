@@ -14,7 +14,7 @@ from mvp_msgs.msg import ControlProcess
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64, Int32MultiArray
 from std_srvs.srv import SetBool, SetBoolResponse
-
+from sklearn.preprocessing import MinMaxScaler
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -32,7 +32,7 @@ random.seed(random_seed)
 np.random.seed(random_seed)
 torch.manual_seed(random_seed)
 
-
+ 
 class QNetwork(nn.Module):
     def __init__(self, state_size, action_size, hidden_layers):
         super(QNetwork, self).__init__()
@@ -45,7 +45,7 @@ class QNetwork(nn.Module):
             hidden_layer = int(hidden_layer)  
             print("input_size:", input_size, "hidden_layer:", hidden_layer)  
             layers.append(nn.Linear(input_size, hidden_layer))
-            layers.append(nn.ReLU())
+            layers.append(nn.Tanh())
             input_size = hidden_layer
 
         # Output layer for action_size actions
@@ -74,7 +74,8 @@ class ReplayBuffer:
 
 class Agent:
     def __init__(self, state_size, action_size, config):
-        self.state_size = config['environment']['error_size'] + config['environment']['servo_joints_size']
+        self.state_size = config['environment']['error_size'] + config['environment']['state_size'] + config['environment']['servo_joints_size']
+        print("State size:", self.state_size)
         self.action_size = action_size
         self.gamma = config['agent']['gamma']
         self.batch_size = config['agent']['batch_size']
@@ -190,12 +191,17 @@ class Agent:
 class GridWorldEnv:
     def __init__(self, config):
         self.config = config
-        self.state_size = config['environment']['error_size'] + config['environment']['servo_joints_size']
+        #temporarily dropped passing joint angle changes to the network
+        self.state_size = config['environment']['error_size'] + config['environment']['state_size'] + config['environment']['servo_joints_size']
         self.action_size = config['environment']['action_size']
         self.position_err = np.zeros(3)
         self.v_err = np.zeros(3)
         self.orientation_err = np.zeros(3)
         self.omega_ref_err = np.zeros(3)
+        self.position_state = np.zeros(3)
+        self.v_state = np.zeros(3)
+        self.orientation_state = np.zeros(3)
+        self.omega_ref_state = np.zeros(3)
         self._episode_ended = False
         self.max_episode_duration = config['environment']['max_episode_duration']
         self.thruster_history_length = config['environment']['thruster_history_length']
@@ -203,6 +209,11 @@ class GridWorldEnv:
         self.sampling_time = config['environment']['sampling_time']
         self.action_mapping = {int(k): v for k, v in config['environment']['action_mapping'].items()}
         
+        # Initialize scaler for all inputs
+        self.scaler = MinMaxScaler(feature_range=(-1, 1))
+
+        # Fit scaler with dummy data initially
+        self.scaler.fit(np.zeros((1, self.state_size)))
 
         # Retrieve servo and thruster size from config
         self.servo_joints_size = config['environment']['servo_joints_size']
@@ -230,9 +241,10 @@ class GridWorldEnv:
         rospy.Service('/save_policy', SetBool, self.save_policy_service)
 
         rospy.Subscriber('/race2/controller/process/error', ControlProcess, self.update_current_error)
-        # rospy.Subscriber('/race2/control/thruster/heave_bow', Float64, self.update_thrust_heave_bow)
+        rospy.Subscriber('/race2/controller/process/state', ControlProcess, self.update_current_state)
+        rospy.Subscriber('/race2/control/thruster/heave_bow', Float64, self.update_thrust_heave_bow)
         rospy.Subscriber('/race2/control/thruster/surge_port', Float64, self.update_thrust_surge_port)
-        # rospy.Subscriber('/race2/control/thruster/sway_stern', Float64, self.update_thrust_sway_stern)
+        rospy.Subscriber('/race2/control/thruster/sway_stern', Float64, self.update_thrust_sway_stern)
         rospy.Subscriber('/race2/control/thruster/surge_starboard', Float64, self.update_thrust_surge_starboard)
         rospy.Subscriber('/race2/control/servos/joint_states', JointState, self.update_joint_states)
 
@@ -258,30 +270,97 @@ class GridWorldEnv:
 
         return SetBoolResponse(success=True, message="Policy control and training updated")
 
+    # def update_current_error(self, data):
+    #     self.position_err = np.array([data.position.z ])
+    #     self.orientation_err = np.array([data.orientation.x, data.orientation.y, data.orientation.z])
+    #     self.v_err = np.array([data.velocity.x, data.velocity.y, data.velocity.z])
+    #     self.omega_ref_err = np.array([data.angular_rate.x, data.angular_rate.y, data.angular_rate.z])
+
     def update_current_error(self, data):
-        self.position_err = np.array([data.position.x, data.position.y, data.position.z])
-        self.v_err = np.array([data.velocity.x, data.velocity.y, data.velocity.z])
-        self.orientation_err = np.array([data.orientation.x, data.orientation.y, data.orientation.z])
-        self.omega_ref_err = np.array([data.angular_rate.x, data.angular_rate.y, data.angular_rate.z])
+        # Extract errors
+        raw_position_err = np.array([data.position.x,data.position.y,data.position.z])
+        raw_orientation_err = np.array([ data.orientation.x,data.orientation.y, data.orientation.z])
+        raw_v_err = np.array([data.velocity.x, data.velocity.y, data.velocity.z])
+        raw_omega_ref_err = np.array([data.angular_rate.x, data.angular_rate.y, data.angular_rate.z])
+
+        # Combine errors into a single numpy array
+        raw_state = np.concatenate([raw_position_err, 
+                                    raw_orientation_err, 
+                                    raw_v_err, 
+                                    raw_omega_ref_err
+                                    ])
+        raw_state_np = raw_state.reshape(1, -1)  # Reshape for scaler
+
+        # Dynamically fit and transform the state
+        self.scaler.partial_fit(raw_state_np)
+        scaled_state_np = self.scaler.transform(raw_state_np)
+
+        # Convert back to PyTorch tensor
+        scaled_state_tensor = torch.from_numpy(scaled_state_np).float()
+
+        # Split the scaled tensor into components
+        self.position_err = scaled_state_tensor[0, :3]  # Depth (first element)
+        self.orientation_err = scaled_state_tensor[0, 3:6]  # Orientation angles (next three elements except roll)
+        self.v_err = scaled_state_tensor[0, 6:9]  # Surge and sway (next two elements)
+        self.omega_ref_err = scaled_state_tensor[0, 9:12] #dummy since doesnt have to be used
+
+    def update_current_state(self, data):
+        # Extract errors
+        raw_position_state = np.array([data.position.x,data.position.y,data.position.z])
+        raw_orientation_state = np.array([ data.orientation.x,data.orientation.y, data.orientation.z])
+        raw_v_state = np.array([data.velocity.x, data.velocity.y, data.velocity.z])
+        raw_omega_ref_state = np.array([data.angular_rate.x, data.angular_rate.y, data.angular_rate.z])
+
+        # Combine errors into a single numpy array
+        raw_state = np.concatenate([raw_position_state, 
+                                    raw_orientation_state, 
+                                    raw_v_state, 
+                                    raw_omega_ref_state
+                                    ])
+        raw_state_np = raw_state.reshape(1, -1)
+
+        # Dynamically fit and transform the state
+        self.scaler.partial_fit(raw_state_np)
+        scaled_state_np = self.scaler.transform(raw_state_np)
+
+        # Convert back to PyTorch tensor
+        scaled_state_tensor = torch.from_numpy(scaled_state_np).float()
+
+        # Split the scaled tensor into components
+        self.position_state = scaled_state_tensor[0, :3]  # Depth (first element)
+        self.orientation_state = scaled_state_tensor[0, 3:6]  # Orientation angles (next three elements except roll)
+        self.v_state = scaled_state_tensor[0, 6:9]  # Surge and sway (next two elements)
+        self.omega_ref_state = scaled_state_tensor[0, 9:12] #dummy since doesnt have to be used
 
     def update_joint_states(self, data):
         self.joint_angles = np.array(data.position[:2])
+
     def update_thrust_surge_port(self, data):
         self.thrust_surge_port = data.data
-
     def update_thrust_surge_starboard(self, data):
         self.thrust_surge_starboard = data.data
 
-    # def update_thrust_heave_bow(self, data):
-    #     self.thrust_heave_bow = data.data
+    def update_thrust_heave_bow(self, data):
+        self.thrust_heave_bow = data.data
 
-    # def update_thrust_sway_stern(self, data):
-    #     self.thrust_sway_stern = data.data
+    def update_thrust_sway_stern(self, data):
+        self.thrust_sway_stern = data.data
 
     def step(self, action_index):
         if not self.use_policy:
             rospy.loginfo("Policy is disabled, using static thruster command.")
-            state = np.concatenate([self.position_err, self.v_err, self.orientation_err, self.omega_ref_err])
+            state = np.concatenate(
+                [self.position_err[2:3], # Depth
+                 self.v_err[:2], # Surge and sway
+                 self.orientation_err[1:3], # roll, pitch, yaw
+                #  self.omega_ref_err
+                 self.position_state[ 2:3],
+                 self.v_state[:2],
+                 self.orientation_state[1:3],
+                    # self.omgea_ref_state
+                 self.joint_angles
+                ])
+            
             return state, 0, True, {}
 
         # Map the action index to actual action values
@@ -308,14 +387,19 @@ class GridWorldEnv:
         reward = self.calculate_reward()
 
         # Prepare the next state
-        next_state = np.concatenate([
-            self.position_err,
-            self.v_err,
-            self.orientation_err,
-            self.omega_ref_err,
-            self.joint_angles
-        ])
+        next_state = np.concatenate(
+                [self.position_err[2:3], # Depth
+                 self.v_err[:2], # Surge and sway
+                 self.orientation_err[1:3], # roll, pitch, yaw
+                #  self.omega_ref_err
+                 self.position_state[2:3],
+                 self.v_state[:2],
+                 self.orientation_state[1:3],
+                    # self.omgea_ref_state
+                 self.joint_angles
+                ])
 
+        # print("Next State:", next_state)
         return next_state, reward, done, {}
 
     def reset(self):
@@ -331,13 +415,17 @@ class GridWorldEnv:
         self.joint_positions_history = np.full(self.joint_positions_history.shape, 0)
 
         # Return the initial state
-        return np.concatenate([
-            self.position_err,
-            self.v_err,
-            self.orientation_err,
-            self.omega_ref_err,
-            self.joint_angles
-        ])
+        return np.concatenate(
+                [self.position_err[2:3], # Depth
+                 self.v_err[ :2], # Surge and sway
+                 self.orientation_err[1:3], # roll, pitch, yaw
+                #  self.omega_ref_err
+                 self.position_state[2:3],
+                 self.v_state[ :2],
+                 self.orientation_state[1:3],
+                    # self.omgea_ref_state
+                 self.joint_angles
+                ])
 
     def calculate_reward(self):
         # Reward function parameters
@@ -346,15 +434,14 @@ class GridWorldEnv:
         state_error_weights = np.array(w['state_error_weights'])
 
         # Compute the error vector
-        error = np.concatenate([
-            self.position_err,
-            self.v_err,
-            self.orientation_err,
-            self.omega_ref_err
-        ]).astype(np.float32)
-
+        error = np.concatenate(
+            [self.position_err[2:3], # Depth
+                 self.v_err[:2], # Surge and sway
+                 self.orientation_err[1:3], # pitch, yaw
+            ]).astype(np.float32)
         # Compute performance error (quadratic penalty)
         weighted_errors = state_error_weights * error
+
         performance_error = np.sum(weighted_errors ** 2)
 
         # Servo smoothness penalty using sine and cosine components
@@ -381,10 +468,10 @@ class GridWorldEnv:
 
         # Thruster usage penalty
         u_t = np.array([
-            # self.thrust_heave_bow,
+            self.thrust_heave_bow,
             self.thrust_surge_port,
-            self.thrust_surge_starboard
-            # self.thrust_sway_stern
+            self.thrust_surge_starboard,
+            self.thrust_sway_stern
         ])
         thruster_usage_penalty = np.sum(np.abs(u_t))
 
@@ -418,10 +505,10 @@ class GridWorldEnv:
             w6 * thruster_delta_reward
         )
         
-        print(f"Performance Error Contribution: {-w1 * performance_error}")
-        print(f"Servo Smoothness Penalty Contribution: {-w2 * servo_smoothness_penalty}")
+        # print(f"Performance Error Contribution: {-w1 * performance_error}")
+        # print(f"Servo Smoothness Penalty Contribution: {-w2 * servo_smoothness_penalty}")
         # print(f"Thruster Usage Penalty Contribution: {-w3 * thruster_usage_penalty}")
-        print(f"Thruster Smoothness Penalty Contribution: {-w4 * thruster_smoothness_penalty}")
+        # print(f"Thruster Smoothness Penalty Contribution: {-w4 * thruster_smoothness_penalty}")
         # print(f"Servo Angle Penalty Contribution: {-w5 * servo_angle_penalty}")
         # print(f"Thruster Delta Reward Contribution: {-w6 * thruster_delta_reward}")
 
@@ -562,6 +649,7 @@ class GridWorldEnv:
 
 #         print(f"Episode completed with total reward: {total_reward}")
 
+# Batch based learning 2nd version
 def continuous_learning(env, agent, config):
     max_episodes = config['training']['max_episodes']
     max_t = config['training']['max_t']
@@ -571,7 +659,7 @@ def continuous_learning(env, agent, config):
     epsilon_min = config['agent']['epsilon_min']
 
     episode_count = 0
-    rate = rospy.Rate(50)  # e.g., 50 Hz loop rate
+    rate = rospy.Rate(50) 
 
     # Initialize plotting
     plt.ion()

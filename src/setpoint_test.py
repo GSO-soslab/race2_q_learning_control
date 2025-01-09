@@ -97,7 +97,7 @@ def publisher():
     #     _  _
     #    |    | 
     ##############################
-    publish_values(Vector3(0.0, 0.0, 5.0), Vector3(0.0, 0.0, 0.0), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 30)
+    publish_values(Vector3(0.0, 0.0, 5.0), Vector3(0.0, 0.0, 0.0), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 50)
 
 
 
@@ -108,7 +108,7 @@ def publisher():
     #   |
     # __|  
     ##############################
-    publish_values(Vector3(0.0, 0.0, 3.0), Vector3(0.0, 0.0, 1.57), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 30)
+    publish_values(Vector3(0.0, 0.0, 3.0), Vector3(0.0, 0.0, 1.57), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 50)
 
 
 
@@ -118,19 +118,19 @@ def publisher():
     # |    |
     #  _  _
     ##############################
-    publish_values(Vector3(0.0, 0.0, 3.0), Vector3(0.0, 0.0, 3.14), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 30)
+    publish_values(Vector3(0.0, 0.0, 3.0), Vector3(0.0, 0.0, 3.14), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 50)
 
 
 
 
     rospy.loginfo("Publishing setpoint 3/1 for 30 seconds")
     
-    publish_values(Vector3(0.0, 0.0, 3.0), Vector3(0.0, 0.0, 3.14), Vector3(-0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 30)
+    publish_values(Vector3(0.0, 0.0, 3.0), Vector3(0.0, 0.0, 3.14), Vector3(-0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 50)
 
 
     rospy.loginfo("Publishing setpoint 3/2 for 30 seconds")
     
-    publish_values(Vector3(0.0, 0.0, 3.0), Vector3(0.0, 0.0, 3.14), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 30)
+    publish_values(Vector3(0.0, 0.0, 3.0), Vector3(0.0, 0.0, 3.14), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 100)
 
 
     rospy.loginfo("Publishing setpoint 4 for 30 seconds")
@@ -139,7 +139,7 @@ def publisher():
     # |  
     # | __
     ##############################
-    publish_values(Vector3(0.0, 0.0, 5.0), Vector3(0.0, 0.0, -1.57), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 30)
+    publish_values(Vector3(0.0, 0.0, 5.0), Vector3(0.0, 0.0, -1.57), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 50)
 
 
 

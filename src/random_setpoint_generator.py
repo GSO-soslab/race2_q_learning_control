@@ -29,7 +29,7 @@ def publisher():
     vel_x_min, vel_x_max = -0.28, 0.28
 
     # Time parameters
-    random_duration = rospy.get_param("~random_duration",40)
+    random_duration = rospy.get_param("~random_duration",60)
     rate_hz = rospy.get_param("~rate_hz", 10.0)
     rate = rospy.Rate(rate_hz)
 
