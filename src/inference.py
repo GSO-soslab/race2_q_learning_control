@@ -34,10 +34,11 @@ class InferenceAgent:
         with torch.no_grad():
             action_values = self.qnetwork(state)
         action_index = torch.argmax(action_values).item()
+        rospy.loginfo(f"Predicted action values: {action_values}, Chosen action: {action_index}")
         return action_index
 
 # Global variable to track if inference is enabled
-inference_enabled = False
+inference_enabled = True
 
 def toggle_inference_service(request):
     """Service callback to enable/disable inference."""
@@ -83,7 +84,7 @@ def run_inference(model_path):
     # Publisher for the thruster action
     thruster_action_pub = rospy.Publisher('/thruster_action', Int32MultiArray, queue_size=10)
 
-    rate = rospy.Rate(50)  # Define a loop rate (e.g., 10 Hz)
+    rate = rospy.Rate(5)  # Define a loop rate (e.g., 10 Hz)
 
     global inference_enabled
     episode = 0  # To keep track of the number of episodes
@@ -102,7 +103,6 @@ def run_inference(model_path):
             while not done and not rospy.is_shutdown() and inference_enabled:
                 # Get action from the policy
                 action_index = agent.act(state)
-
                 # Take the action in the environment
                 next_state, reward, done, _ = env.step(action_index)
                 state = next_state
@@ -134,7 +134,7 @@ if __name__ == '__main__':
         rospy.Service('/enable_inference', SetBool, toggle_inference_service)
         
         # Path to the saved model
-        model_path = rospy.get_param('~model_path', 'dqn_model_2025-01-08_15-25-33.pth')
+        model_path = rospy.get_param('~model_path', 'dqn_model_2025-01-10_15-55-45.pth')
 
         # Run the inference indefinitely
         run_inference(model_path)

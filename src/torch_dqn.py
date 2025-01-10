@@ -45,7 +45,7 @@ class QNetwork(nn.Module):
             hidden_layer = int(hidden_layer)  
             print("input_size:", input_size, "hidden_layer:", hidden_layer)  
             layers.append(nn.Linear(input_size, hidden_layer))
-            layers.append(nn.Tanh())
+            layers.append(nn.LeakyReLU())
             input_size = hidden_layer
 
         # Output layer for action_size actions
@@ -123,6 +123,7 @@ class Agent:
             with torch.no_grad():
                 action_values = self.qnetwork(state)
             action_index = torch.argmax(action_values).item()
+            rospy.loginfo(f"Predicted action values: {action_values}, Chosen action: {action_index}")
             return action_index
         else:
             return random.choice(range(self.action_size))
@@ -289,20 +290,25 @@ class GridWorldEnv:
                                     raw_v_err, 
                                     raw_omega_ref_err
                                     ])
-        raw_state_np = raw_state.reshape(1, -1)  # Reshape for scaler
+        # raw_state_np = raw_state.reshape(1, -1)  # Reshape for scaler
 
-        # Dynamically fit and transform the state
-        self.scaler.partial_fit(raw_state_np)
-        scaled_state_np = self.scaler.transform(raw_state_np)
+        # # Dynamically fit and transform the state
+        # self.scaler.partial_fit(raw_state_np)
+        # scaled_state_np = self.scaler.transform(raw_state_np)
 
-        # Convert back to PyTorch tensor
-        scaled_state_tensor = torch.from_numpy(scaled_state_np).float()
+        # # Convert back to PyTorch tensor
+        # scaled_state_tensor = torch.from_numpy(scaled_state_np).float()
 
-        # Split the scaled tensor into components
-        self.position_err = scaled_state_tensor[0, :3]  # Depth (first element)
-        self.orientation_err = scaled_state_tensor[0, 3:6]  # Orientation angles (next three elements except roll)
-        self.v_err = scaled_state_tensor[0, 6:9]  # Surge and sway (next two elements)
-        self.omega_ref_err = scaled_state_tensor[0, 9:12] #dummy since doesnt have to be used
+        # # Split the scaled tensor into components
+        # self.position_err = scaled_state_tensor[0, :3]  # Depth (first element)
+        # self.orientation_err = scaled_state_tensor[0, 3:6]  # Orientation angles (next three elements except roll)
+        # self.v_err = scaled_state_tensor[0, 6:9]  # Surge and sway (next two elements)
+        # self.omega_ref_err = scaled_state_tensor[0, 9:12] #dummy since doesnt have to be used
+        self.position_err = raw_position_err
+        self.orientation_err = raw_orientation_err
+        self.v_err = raw_v_err
+        self.omega_ref_err = raw_omega_ref_err
+
 
     def update_current_state(self, data):
         # Extract errors
@@ -319,18 +325,23 @@ class GridWorldEnv:
                                     ])
         raw_state_np = raw_state.reshape(1, -1)
 
-        # Dynamically fit and transform the state
-        self.scaler.partial_fit(raw_state_np)
-        scaled_state_np = self.scaler.transform(raw_state_np)
+        # # Dynamically fit and transform the state
+        # self.scaler.partial_fit(raw_state_np)
+        # scaled_state_np = self.scaler.transform(raw_state_np)
 
-        # Convert back to PyTorch tensor
-        scaled_state_tensor = torch.from_numpy(scaled_state_np).float()
+        # # Convert back to PyTorch tensor
+        # scaled_state_tensor = torch.from_numpy(scaled_state_np).float()
 
-        # Split the scaled tensor into components
-        self.position_state = scaled_state_tensor[0, :3]  # Depth (first element)
-        self.orientation_state = scaled_state_tensor[0, 3:6]  # Orientation angles (next three elements except roll)
-        self.v_state = scaled_state_tensor[0, 6:9]  # Surge and sway (next two elements)
-        self.omega_ref_state = scaled_state_tensor[0, 9:12] #dummy since doesnt have to be used
+        # # Split the scaled tensor into components
+        # self.position_state = scaled_state_tensor[0, :3]  # Depth (first element)
+        # self.orientation_state = scaled_state_tensor[0, 3:6]  # Orientation angles (next three elements except roll)
+        # self.v_state = scaled_state_tensor[0, 6:9]  # Surge and sway (next two elements)
+        # self.omega_ref_state = scaled_state_tensor[0, 9:12] #dummy since doesnt have to be used
+        self.position_state = raw_position_state
+        self.orientation_state = raw_orientation_state
+        self.v_state = raw_v_state
+        self.omega_ref_state = raw_omega_ref_state
+
 
     def update_joint_states(self, data):
         self.joint_angles = np.array(data.position[:2])
@@ -352,15 +363,14 @@ class GridWorldEnv:
             state = np.concatenate(
                 [self.position_err[2:3], # Depth
                  self.v_err[:2], # Surge and sway
-                 self.orientation_err[1:3], # roll, pitch, yaw
+                 self.orientation_err[:3], # roll, pitch, yaw
                 #  self.omega_ref_err
-                 self.position_state[ 2:3],
+                 self.position_state[2:3],
                  self.v_state[:2],
-                 self.orientation_state[1:3],
+                 self.orientation_state[:3],
                     # self.omgea_ref_state
                  self.joint_angles
                 ])
-            
             return state, 0, True, {}
 
         # Map the action index to actual action values
@@ -390,11 +400,11 @@ class GridWorldEnv:
         next_state = np.concatenate(
                 [self.position_err[2:3], # Depth
                  self.v_err[:2], # Surge and sway
-                 self.orientation_err[1:3], # roll, pitch, yaw
+                 self.orientation_err[:3], # roll, pitch, yaw
                 #  self.omega_ref_err
                  self.position_state[2:3],
                  self.v_state[:2],
-                 self.orientation_state[1:3],
+                 self.orientation_state[:3],
                     # self.omgea_ref_state
                  self.joint_angles
                 ])
@@ -417,12 +427,12 @@ class GridWorldEnv:
         # Return the initial state
         return np.concatenate(
                 [self.position_err[2:3], # Depth
-                 self.v_err[ :2], # Surge and sway
-                 self.orientation_err[1:3], # roll, pitch, yaw
+                 self.v_err[:2], # Surge and sway
+                 self.orientation_err[:3], # roll, pitch, yaw
                 #  self.omega_ref_err
                  self.position_state[2:3],
-                 self.v_state[ :2],
-                 self.orientation_state[1:3],
+                 self.v_state[:2],
+                 self.orientation_state[:3],
                     # self.omgea_ref_state
                  self.joint_angles
                 ])
@@ -437,7 +447,7 @@ class GridWorldEnv:
         error = np.concatenate(
             [self.position_err[2:3], # Depth
                  self.v_err[:2], # Surge and sway
-                 self.orientation_err[1:3], # pitch, yaw
+                 self.orientation_err[:3], # roll, pitch, yaw
             ]).astype(np.float32)
         # Compute performance error (quadratic penalty)
         weighted_errors = state_error_weights * error
