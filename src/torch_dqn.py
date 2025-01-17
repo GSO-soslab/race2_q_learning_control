@@ -74,7 +74,7 @@ class ReplayBuffer:
 
 class Agent:
     def __init__(self, state_size, action_size, config):
-        self.state_size = config['environment']['error_size'] + config['environment']['state_size'] + config['environment']['servo_joints_size']
+        self.state_size = config['environment']['error_size'] + config['environment']['state_size'] + config['environment']['servo_joints_size'] + config['environment']['thruster_size']
         print("State size:", self.state_size)
         self.action_size = action_size
         self.gamma = config['agent']['gamma']
@@ -193,7 +193,7 @@ class GridWorldEnv:
     def __init__(self, config):
         self.config = config
         #temporarily dropped passing joint angle changes to the network
-        self.state_size = config['environment']['error_size'] + config['environment']['state_size'] + config['environment']['servo_joints_size']
+        self.state_size = config['environment']['error_size'] + config['environment']['state_size'] + config['environment']['servo_joints_size'] + config['environment']['thruster_size']
         self.action_size = config['environment']['action_size']
         self.position_err = np.zeros(3)
         self.v_err = np.zeros(3)
@@ -203,6 +203,14 @@ class GridWorldEnv:
         self.v_state = np.zeros(3)
         self.orientation_state = np.zeros(3)
         self.omega_ref_state = np.zeros(3)
+        self.position_setpoint = np.zeros(3)
+        self.v_setpoint = np.zeros(3)
+        self.orientation_setpoint = np.zeros(3)
+        self.omega_ref_setpoint = np.zeros(3)
+        self.thrust_heave_bow = 0.0
+        self.thrust_surge_port = 0.0
+        self.thrust_surge_starboard = 0.0
+        self.thrust_sway_stern = 0.0
         self._episode_ended = False
         self.max_episode_duration = config['environment']['max_episode_duration']
         self.thruster_history_length = config['environment']['thruster_history_length']
@@ -222,8 +230,11 @@ class GridWorldEnv:
 
         # Initialize joint positions for servos
         self.joint_angles = np.zeros(self.servo_joints_size)
+        self.thruster_commands = np.zeros(thruster_size)
         self.joint_positions_history = np.zeros((self.servo_history_length, self.servo_joints_size))
         self.u_prev = np.zeros((self.thruster_history_length, thruster_size))
+        self.thruster_command_action_prev = np.zeros((self.thruster_history_length,self.servo_joints_size))
+        self.thruster_action = np.zeros(self.servo_joints_size)
 
 
         # ROS node initialization
@@ -242,6 +253,7 @@ class GridWorldEnv:
         rospy.Service('/save_policy', SetBool, self.save_policy_service)
 
         rospy.Subscriber('/race2/controller/process/error', ControlProcess, self.update_current_error)
+        rospy.Subscriber('/race2/controller/process/setpoint', ControlProcess, self.update_current_setpoint)
         rospy.Subscriber('/race2/controller/process/state', ControlProcess, self.update_current_state)
         rospy.Subscriber('/race2/control/thruster/heave_bow', Float64, self.update_thrust_heave_bow)
         rospy.Subscriber('/race2/control/thruster/surge_port', Float64, self.update_thrust_surge_port)
@@ -342,6 +354,37 @@ class GridWorldEnv:
         self.v_state = raw_v_state
         self.omega_ref_state = raw_omega_ref_state
 
+    def update_current_setpoint(self, data):
+
+        raw_position_setpoint = np.array([data.position.x,data.position.y,data.position.z])
+        raw_orientation_setpoint = np.array([ data.orientation.x,data.orientation.y, data.orientation.z])
+        raw_v_setpoint = np.array([data.velocity.x, data.velocity.y, data.velocity.z])
+        raw_omega_ref_setpoint = np.array([data.angular_rate.x, data.angular_rate.y, data.angular_rate.z])
+
+        #Combine errors into a single numpy array
+        raw_setpoint = np.concatenate([raw_position_setpoint, 
+                                    raw_orientation_setpoint, 
+                                    raw_v_setpoint, 
+                                    raw_omega_ref_setpoint
+                                    ])
+        raw_setpoint_np = raw_setpoint.reshape(1, -1)
+
+        # # Dynamically fit and transform the state
+        # self.scaler.partial_fit(raw_state_np)
+        # scaled_state_np = self.scaler.transform(raw_state_np)
+
+        # # Convert back to PyTorch tensor
+        # scaled_state_tensor = torch.from_numpy(scaled_state_np).float()
+
+        # # Split the scaled tensor into components
+        # self.position_state = scaled_state_tensor[0, :3]  # Depth (first element)
+        # self.orientation_state = scaled_state_tensor[0, 3:6]  # Orientation angles (next three elements except roll)
+        # self.v_state = scaled_state_tensor[0, 6:9]  # Surge and sway (next two elements)
+        # self.omega_ref_state = scaled_state_tensor[0, 9:12] #dummy since doesnt have to be used
+        self.position_setpoint = raw_position_setpoint
+        self.orientation_setpoint = raw_orientation_setpoint
+        self.v_setpoint = raw_v_setpoint
+        self.omega_ref_setpoint = raw_omega_ref_setpoint
 
     def update_joint_states(self, data):
         self.joint_angles = np.array(data.position[:2])
@@ -356,7 +399,7 @@ class GridWorldEnv:
 
     def update_thrust_sway_stern(self, data):
         self.thrust_sway_stern = data.data
-
+    
     def step(self, action_index):
         if not self.use_policy:
             rospy.loginfo("Policy is disabled, using static thruster command.")
@@ -364,19 +407,24 @@ class GridWorldEnv:
                 [self.position_err[2:3], # Depth
                  self.v_err[:2], # Surge and sway
                  self.orientation_err[:3], # roll, pitch, yaw
-                #  self.omega_ref_err
+                #  self.omega_ref_err[2:3],
                  self.position_state[2:3],
                  self.v_state[:2],
                  self.orientation_state[:3],
-                    # self.omgea_ref_state
-                 self.joint_angles
+                 self.omega_ref_state[2:3],
+                 self.joint_angles,         
+                 np.array([self.thrust_heave_bow,  # Thrust components
+                        self.thrust_surge_port,
+                        self.thrust_surge_starboard,
+                        self.thrust_sway_stern])
                 ])
             return state, 0, True, {}
 
         # Map the action index to actual action values
         action = self.action_mapping[action_index]
         action1, action2 = action  # Unpack the action values
-
+        self.thruster_action = action
+        print("thruster_action:", self.thruster_action)
         # Create the array: [action1, 1, action2, 1, 1, 1]
         thruster_command = Int32MultiArray(data=[action1, 1, action2, 1, 1, 1])
 
@@ -401,12 +449,16 @@ class GridWorldEnv:
                 [self.position_err[2:3], # Depth
                  self.v_err[:2], # Surge and sway
                  self.orientation_err[:3], # roll, pitch, yaw
-                #  self.omega_ref_err
+                 #self.omega_ref_err
                  self.position_state[2:3],
                  self.v_state[:2],
                  self.orientation_state[:3],
-                    # self.omgea_ref_state
-                 self.joint_angles
+                 self.omega_ref_state[2:3],
+                 self.joint_angles,
+                 np.array([self.thrust_heave_bow,  # Thrust components
+                        self.thrust_surge_port,
+                        self.thrust_surge_starboard,
+                        self.thrust_sway_stern])
                 ])
 
         # print("Next State:", next_state)
@@ -423,37 +475,39 @@ class GridWorldEnv:
               
         # Initialize joint_positions_history with the initial joint angles
         self.joint_positions_history = np.full(self.joint_positions_history.shape, 0)
-
         # Return the initial state
-        return np.concatenate(
-                [self.position_err[2:3], # Depth
-                 self.v_err[:2], # Surge and sway
-                 self.orientation_err[:3], # roll, pitch, yaw
-                #  self.omega_ref_err
-                 self.position_state[2:3],
-                 self.v_state[:2],
-                 self.orientation_state[:3],
-                    # self.omgea_ref_state
-                 self.joint_angles
-                ])
+        return np.concatenate([
+            self.position_err[2:3],  # Depth error
+            self.v_err[:2],          # Surge and sway velocity error
+            self.orientation_err[:3],  # Roll, pitch, yaw orientation error
+            self.position_state[2:3],  # Depth state
+            self.v_state[:2],          # Surge and sway velocity state
+            self.orientation_state[:3],  # Roll, pitch, yaw state
+            self.omega_ref_state[2:3], 
+            self.joint_angles,          # Joint angles
+            np.array([self.thrust_heave_bow,  # Thrust components
+                    self.thrust_surge_port,
+                    self.thrust_surge_starboard,
+                    self.thrust_sway_stern])
+        ])
 
     def calculate_reward(self):
         # Reward function parameters
         w = self.config['reward_function']
-        w1, w2, w3, w4, w5, w6 = w['w1'], w['w2'], w['w3'], w['w4'], w['w5'], w['w6']
+        w1, w2, w3, w4, w5, w6 ,w7 = w['w1'], w['w2'], w['w3'], w['w4'], w['w5'], w['w6'], w['w7']
         state_error_weights = np.array(w['state_error_weights'])
 
         # Compute the error vector
+        ###Temporarily error is setpoint#######
         error = np.concatenate(
             [self.position_err[2:3], # Depth
-                 self.v_err[:2], # Surge and sway
-                 self.orientation_err[:3], # roll, pitch, yaw
+             self.v_err[:2], # Surge and sway
+             self.orientation_err[:3], # roll, pitch, yaw
             ]).astype(np.float32)
         # Compute performance error (quadratic penalty)
         weighted_errors = state_error_weights * error
-
         performance_error = np.sum(weighted_errors ** 2)
-
+        performance_error = np.exp(-performance_error)
         # Servo smoothness penalty using sine and cosine components
         servo_smoothness_penalty = 0
         delta_theta = np.zeros(2)
@@ -491,28 +545,41 @@ class GridWorldEnv:
         #     self.u_prev = np.vstack((self.u_prev[1:], u_t))
 
         # Thruster smoothness penalty
-        if len(self.u_prev) > 1:  # Check if there’s enough history to calculate smoothness
-            thruster_smoothness_penalty = np.linalg.norm(u_t - np.average(self.u_prev, axis=0))
-        else:
-            thruster_smoothness_penalty = np.linalg.norm(u_t)  # Initial penalty based on u_t
+        thruster_smoothness_penalty = np.linalg.norm(u_t - np.average(self.u_prev, axis=0))
 
         # Update self.u_prev to store the history
-        self.u_prev = np.vstack((self.u_prev[1:], u_t)) if len(self.u_prev) > 1 else np.vstack((self.u_prev, u_t))
+        self.u_prev = np.vstack((self.u_prev[1:], u_t))
 
+        print(self.u_prev.shape)
         # Thruster delta reward
         thruster_delta_reward = np.linalg.norm(u_t - self.u_prev[-2])
 
         # Servo angle penalty
         servo_angle_penalty = np.linalg.norm(self.joint_angles)
         # print("Smoothness penalty:", thruster_smoothness_penalty)
+
+
+        # Update thruster_command_action_prev with clear logic
+        thruster_action_penalty = np.linalg.norm(self.thruster_action - np.average(self.thruster_command_action_prev, axis=0))
+
+        self.thruster_command_action_prev = np.vstack((
+            self.thruster_command_action_prev[1:],  # Keep all except the first
+            self.thruster_action  # Add the newest action
+        ))
+
+        
+        # Debugging output (optional)
+        # print("Thruster Action Penalty:", self.thruster_command_action_prev)
+
         # Total reward
         reward =   - (
-            w1 * performance_error +
+            - w1 * performance_error +
             w2 * servo_smoothness_penalty +
             w3 * thruster_usage_penalty +
             w4 * thruster_smoothness_penalty +
             w5 * servo_angle_penalty +
-            w6 * thruster_delta_reward
+            w6 * thruster_delta_reward +
+            w7 * thruster_action_penalty
         )
         
         # print(f"Performance Error Contribution: {-w1 * performance_error}")

@@ -20,7 +20,7 @@ def publisher():
     # Stable values to revert to or to use when a field is not being varied
     stable_position = Vector3(0.0, 0.0, 4.0)  
     stable_orientation = Vector3(0.0, 0.0, 0.0) 
-    stable_velocity = Vector3(0.0, 0.0, 0.0)   
+    stable_velocity = Vector3(0.2, 0.0, 0.0)   
     stable_angular_rate = Vector3(0.0, 0.0, 0.0)
 
     # Random ranges for fields we want to vary:
