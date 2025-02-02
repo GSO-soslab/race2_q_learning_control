@@ -5,7 +5,9 @@ from datetime import datetime
 
 import matplotlib.pyplot as plt
 import numpy as np
-import rospy
+import rclpy
+from rclpy.node import Node
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -247,20 +249,20 @@ class GridWorldEnv:
         self.stop_training = False
 
         # Service for enabling/disabling the policy
-        rospy.Service('/toggle_policy', SetBool, self.toggle_policy_service)
-
+        self.create_service(SetBool, '/toggle_policy', self.toggle_policy_service)
+        
         # Service for saving the policy manually
-        rospy.Service('/save_policy', SetBool, self.save_policy_service)
-
-        rospy.Subscriber('/race2/controller/process/error', ControlProcess, self.update_current_error)
-        rospy.Subscriber('/race2/controller/process/setpoint', ControlProcess, self.update_current_setpoint)
-        rospy.Subscriber('/race2/controller/process/state', ControlProcess, self.update_current_state)
-        rospy.Subscriber('/race2/control/thruster/heave_bow', Float64, self.update_thrust_heave_bow)
-        rospy.Subscriber('/race2/control/thruster/surge_port', Float64, self.update_thrust_surge_port)
-        rospy.Subscriber('/race2/control/thruster/sway_stern', Float64, self.update_thrust_sway_stern)
-        rospy.Subscriber('/race2/control/thruster/surge_starboard', Float64, self.update_thrust_surge_starboard)
-        rospy.Subscriber('/race2/control/servos/joint_states', JointState, self.update_joint_states)
-
+        self.create_service(SetBool, '/save_policy', self.save_policy_service)
+        
+        self.create_subscription(ControlProcess, '/race2/controller/process/error', self.update_current_error, 10)
+        self.create_subscription(ControlProcess, '/race2/controller/process/setpoint', self.update_current_setpoint, 10)
+        self.create_subscription(ControlProcess, '/race2/controller/process/state', self.update_current_state, 10)
+        self.create_subscription(Float64, '/race2/control/thruster/heave_bow', self.update_thrust_heave_bow, 10)
+        self.create_subscription(Float64, '/race2/control/thruster/surge_port', self.update_thrust_surge_port, 10)
+        self.create_subscription(Float64, '/race2/control/thruster/sway_stern', self.update_thrust_sway_stern, 10)
+        self.create_subscription(Float64, '/race2/control/thruster/surge_starboard', self.update_thrust_surge_starboard, 10)
+        self.create_subscription(JointState, '/race2/control/servos/joint_states', self.update_joint_states, 10)
+        
         self.reset()
 
     # Service callback to save the policy manually
@@ -279,7 +281,7 @@ class GridWorldEnv:
             # Also send the thruster command [1, 1, 1, 1, 1, 1]
             thruster_command = Int32MultiArray(data=[1, 1, 1, 1, 1, 1])
             self.thruster_action_pub.publish(thruster_command)
-            rospy.loginfo("Policy disabled. Thruster set to [1, 1, 1, 1, 1, 1] and training stopped.")
+            self.get_logger().info("Policy disabled. Thruster set to [1, 1, 1, 1, 1, 1] and training stopped.")
 
         return SetBoolResponse(success=True, message="Policy control and training updated")
 
@@ -402,7 +404,7 @@ class GridWorldEnv:
     
     def step(self, action_index):
         if not self.use_policy:
-            rospy.loginfo("Policy is disabled, using static thruster command.")
+            self.get_logger().loginfo("Policy is disabled, using static thruster command.")
             state = np.concatenate(
                 [self.position_err[2:3], # Depth
                  self.v_err[:2], # Surge and sway
@@ -431,8 +433,8 @@ class GridWorldEnv:
         # Publish the action array
         self.thruster_action_pub.publish(thruster_command)
 
-        rospy.sleep(self.sampling_time) 
-        current_time = rospy.get_time()
+        rclpy.sleep(self.sampling_time)
+        current_time = self.get_clock().now().seconds_nanoseconds()[0]
         elapsed_time_total = current_time - self.start_time
 
         # Determine if the episode has ended
@@ -466,7 +468,7 @@ class GridWorldEnv:
 
     def reset(self):
         self._episode_ended = False
-        self.start_time = rospy.get_time()
+        self.start_time = self.get_clock().now().to_sec()
 
         # Initialize joint angles randomly or to a specific value
         # initial_joint_angles = np.random.uniform(low=-np.pi, high=np.pi, size=2)
@@ -591,141 +593,6 @@ class GridWorldEnv:
 
         return reward
 
-# episode based learning 1st version
-# def continuous_learning(env, agent, config):
-#     max_episodes = config['training']['max_episodes']
-#     max_t = config['training']['max_t']
-#     target_avg_reward = config['training']['target_avg_reward']
-#     epsilon = config['agent']['epsilon_initial']
-#     epsilon_decay = config['agent']['epsilon_decay']
-#     epsilon_min = config['agent']['epsilon_min']
-
-#     episode_count = 0
-#     rate = rospy.Rate(50)  # Set a rate (e.g., 10 Hz)
-
-#     # Initialize plotting
-#     plt.ion()
-#     fig, ax = plt.subplots(3, 1, figsize=(10, 12))
-
-#     reward_history = []
-#     q_value_history = []
-#     loss_history = []
-#     episodes = []
-
-#     # Set up the plots
-#     ax[0].set_title('Total Reward per Episode')
-#     ax[0].set_xlabel('Episode')
-#     ax[0].set_ylabel('Total Reward')
-#     reward_line, = ax[0].plot([], [], label='Reward')
-#     ax[0].legend()
-
-#     ax[1].set_title('Max Q-value per Episode')
-#     ax[1].set_xlabel('Episode')
-#     ax[1].set_ylabel('Max Q-value')
-#     q_value_line, = ax[1].plot([], [], label='Max Q-value', color='orange')
-#     ax[1].legend()
-
-#     ax[2].set_title('Average Loss per Episode')
-#     ax[2].set_xlabel('Episode')
-#     ax[2].set_ylabel('Average Loss')
-#     loss_line, = ax[2].plot([], [], label='Loss', color='green')
-#     ax[2].legend()
-
-#     # Training Loop
-#     while episode_count < max_episodes and not rospy.is_shutdown():
-#         if env.stop_training:
-#             # rospy.loginfo("Training has been stopped.")
-#             rospy.loginfo("Service called: Saving policy and stopping training.")
-#             save_model(agent)  # Save the trained model
-#             break  # Exit the training loop if training is stopped
-
-#         episode_count += 1
-#         state = env.reset()  # Reset environment to get initial state
-#         score = 0
-#         max_q_value = -float('inf')  # Initialize max Q-value for this episode
-#         episode_loss = 0.0  # Initialize episode loss
-#         loss_steps = 0  # Number of steps where learning occurred
-
-#         for t in range(max_t):  # Limit each episode to max_t steps
-#             action_index = agent.act(state, epsilon)
-#             next_state, reward, done, _ = env.step(action_index)
-#             loss = agent.step(state, action_index, reward, next_state, done)
-#             state = next_state
-
-#             score += reward
-
-#             # Get Q-values for the current state
-#             state_tensor = torch.FloatTensor(state).unsqueeze(0)
-#             with torch.no_grad():
-#                 q_values = agent.qnetwork(state_tensor)
-#             current_max_q = q_values.max().item()
-#             if current_max_q > max_q_value:
-#                 max_q_value = current_max_q  # Update max Q-value for this episode
-
-#             # Accumulate loss if learning occurred
-#             if loss is not None:
-#                 episode_loss += loss
-#                 loss_steps += 1
-
-#             if done:
-#                 break
-
-#             # Sleep to maintain the loop rate
-#             rate.sleep()
-
-#         # Decay epsilon after each episode
-#         epsilon = max(epsilon_min, epsilon_decay * epsilon)
-
-#         # Calculate average loss for the episode
-#         average_loss = episode_loss / loss_steps if loss_steps > 0 else 0.0
-
-#         # Append data for plotting
-#         episodes.append(episode_count)
-#         reward_history.append(score)
-#         q_value_history.append(max_q_value)
-#         loss_history.append(average_loss)
-
-#         # Update the plots
-#         update_plots(ax, episodes, reward_history, q_value_history, loss_history,
-#                      reward_line, q_value_line, loss_line)
-
-#         # Optionally, print the episode score and loss for monitoring
-#         print(f"Episode {episode_count}: Score: {score:.2f}, Max Q-value: {max_q_value:.2f}, Average Loss: {average_loss:.4f}, Epsilon: {epsilon:.3f}")
-
-#         # Check if average reward over the last N episodes meets the target
-#         if target_avg_reward is not None and len(reward_history) >= 10:
-#             avg_reward_recent = np.mean(reward_history[-10:])
-#             if avg_reward_recent >= target_avg_reward:
-#                 print(f"Stopping training as average reward over last 10 episodes is {avg_reward_recent:.2f} (>= {target_avg_reward})")
-#                 break
-
-#     # Save the model if the loop was exited due to max episodes
-#     if not env.stop_training:
-#         save_model(agent)
-    
-#     # After training, set epsilon to 0 to use the greedy policy
-#     epsilon = 0.0
-
-#     # Save the trained model
-#     save_model(agent)
-
-#     # Now, enter an infinite loop where the agent continues to act using the learned policy
-#     print("Training complete. Continuing to run with the learned policy.")
-#     while not rospy.is_shutdown():
-#         state = env.reset()
-#         done = False
-#         total_reward = 0
-#         while not done and not rospy.is_shutdown():
-#             action_index = agent.act(state, epsilon=0.0)  # Use greedy policy
-#             next_state, reward, done, _ = env.step(action_index)
-#             state = next_state
-#             total_reward += reward
-
-#             # Sleep to maintain the loop rate
-#             rate.sleep()
-
-#         print(f"Episode completed with total reward: {total_reward}")
-
 # Batch based learning 2nd version
 def continuous_learning(env, agent, config):
     max_episodes = config['training']['max_episodes']
@@ -736,7 +603,7 @@ def continuous_learning(env, agent, config):
     epsilon_min = config['agent']['epsilon_min']
 
     episode_count = 0
-    rate = rospy.Rate(50) 
+    rate = self.create_rate(50)
 
     # Initialize plotting
     plt.ion()
@@ -767,9 +634,9 @@ def continuous_learning(env, agent, config):
     ax[2].legend()
 
     # Training Loop
-    while episode_count < max_episodes and not rospy.is_shutdown():
+    while episode_count < max_episodes and rclpy.ok():
         if env.stop_training:
-            rospy.loginfo("Service called: Saving policy and stopping training.")
+            self.get_logger().info("Service called: Saving policy and stopping training.")
             save_model(agent)  # Save the trained model
             break  # Exit the training loop if training is stopped
 
@@ -866,11 +733,11 @@ def continuous_learning(env, agent, config):
     print("Training complete. Continuing to run with the learned policy.")
 
     # Run indefinitely using the learned (greedy) policy
-    while not rospy.is_shutdown():
+    while not rclpy.ok():
         state = env.reset()
         done = False
         total_reward = 0
-        while not done and not rospy.is_shutdown():
+        while not done and not rclpy.ok():
             # Greedy action (no exploration)
             action_index = agent.act(state, epsilon=0.0)
             next_state, reward, done, _ = env.step(action_index)
