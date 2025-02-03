@@ -2,7 +2,7 @@ import os
 import random
 from collections import deque
 from datetime import datetime
-
+import time
 import matplotlib.pyplot as plt
 import numpy as np
 import rclpy
@@ -15,7 +15,7 @@ import yaml
 from mvp_msgs.msg import ControlProcess
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64, Int32MultiArray
-from std_srvs.srv import SetBool, SetBoolResponse
+from std_srvs.srv import SetBool, SetBool_Response
 from sklearn.preprocessing import MinMaxScaler
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -191,12 +191,16 @@ class Agent:
         return loss.item()
 
 
-class GridWorldEnv:
+class GridWorldEnv(Node):  # Inherit from Node
     def __init__(self, config):
+        super().__init__('underwater_vehicle_env')  # Initialize the ROS 2 node
+
+        # Retrieve configuration values
         self.config = config
-        #temporarily dropped passing joint angle changes to the network
         self.state_size = config['environment']['error_size'] + config['environment']['state_size'] + config['environment']['servo_joints_size'] + config['environment']['thruster_size']
         self.action_size = config['environment']['action_size']
+        
+        # Initialize state and action values
         self.position_err = np.zeros(3)
         self.v_err = np.zeros(3)
         self.orientation_err = np.zeros(3)
@@ -238,12 +242,9 @@ class GridWorldEnv:
         self.thruster_command_action_prev = np.zeros((self.thruster_history_length,self.servo_joints_size))
         self.thruster_action = np.zeros(self.servo_joints_size)
 
-
-        # ROS node initialization
-        rospy.init_node('underwater_vehicle_env', anonymous=True)
-
-        self.thruster_action_pub = rospy.Publisher('/thruster_action', Int32MultiArray, queue_size=10)
-
+        # ROS node initialization (this is now handled by the Node class inheritance)
+        self.thruster_action_pub = self.create_publisher(Int32MultiArray, '/thruster_action', 10)
+        
         # Initialize the policy control state
         self.use_policy = True
         self.stop_training = False
@@ -254,15 +255,14 @@ class GridWorldEnv:
         # Service for saving the policy manually
         self.create_service(SetBool, '/save_policy', self.save_policy_service)
         
-        self.create_subscription(ControlProcess, '/race2/controller/process/error', self.update_current_error, 10)
-        self.create_subscription(ControlProcess, '/race2/controller/process/setpoint', self.update_current_setpoint, 10)
-        self.create_subscription(ControlProcess, '/race2/controller/process/state', self.update_current_state, 10)
+        # Subscriptions
+        self.create_subscription(JointState, '/race2/control/servos/joint_states', self.update_joint_states, 10)
         self.create_subscription(Float64, '/race2/control/thruster/heave_bow', self.update_thrust_heave_bow, 10)
         self.create_subscription(Float64, '/race2/control/thruster/surge_port', self.update_thrust_surge_port, 10)
-        self.create_subscription(Float64, '/race2/control/thruster/sway_stern', self.update_thrust_sway_stern, 10)
         self.create_subscription(Float64, '/race2/control/thruster/surge_starboard', self.update_thrust_surge_starboard, 10)
-        self.create_subscription(JointState, '/race2/control/servos/joint_states', self.update_joint_states, 10)
+        self.create_subscription(Float64, '/race2/control/thruster/sway_stern', self.update_thrust_sway_stern, 10)
         
+        # Reset the environment
         self.reset()
 
     # Service callback to save the policy manually
@@ -433,9 +433,9 @@ class GridWorldEnv:
         # Publish the action array
         self.thruster_action_pub.publish(thruster_command)
 
-        rclpy.sleep(self.sampling_time)
+        time.sleep(self.sampling_time)
         current_time = self.get_clock().now().seconds_nanoseconds()[0]
-        elapsed_time_total = current_time - self.start_time
+        elapsed_time_total = current_time - self.start_time.seconds_nanoseconds()[0]
 
         # Determine if the episode has ended
         done = elapsed_time_total > self.max_episode_duration
@@ -468,7 +468,7 @@ class GridWorldEnv:
 
     def reset(self):
         self._episode_ended = False
-        self.start_time = self.get_clock().now().to_sec()
+        self.start_time = self.get_clock().now()
 
         # Initialize joint angles randomly or to a specific value
         # initial_joint_angles = np.random.uniform(low=-np.pi, high=np.pi, size=2)
@@ -603,7 +603,7 @@ def continuous_learning(env, agent, config):
     epsilon_min = config['agent']['epsilon_min']
 
     episode_count = 0
-    rate = self.create_rate(50)
+    rate = env.create_rate(50)
 
     # Initialize plotting
     plt.ion()
@@ -800,11 +800,26 @@ def save_model(agent, filename_prefix='dqn_model'):
 #     print(f"Average Evaluation Score over {num_episodes} episodes: {avg_score:.2f}")
 
 
+
 if __name__ == '__main__':
+    rclpy.init(args=None)  # Initialize the ROS 2 system
+    
+    # Create an environment instance with the configuration
     env = GridWorldEnv(config)
+    
+    # Get the state and action size from the environment
     state_size = env.state_size
     action_size = env.action_size
+    
+    # Initialize the agent
     agent = Agent(state_size, action_size, config)
-
+    
     # Train the agent
     continuous_learning(env, agent, config)
+
+    # Keep the ROS 2 event loop running while training
+    rclpy.spin(env)  # Spin the ROS 2 node to handle communication and events
+
+    # Clean up and shut down the node after training is complete
+    env.destroy_node()  # Destroy the node properly
+    rclpy.shutdown()    # Shutdown the ROS 2 system
