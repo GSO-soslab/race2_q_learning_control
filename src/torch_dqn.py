@@ -14,7 +14,7 @@ import torch.optim as optim
 import yaml
 from mvp_msgs.msg import ControlProcess
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Float64, Int32MultiArray
+from std_msgs.msg import Float64, Int16MultiArray
 from std_srvs.srv import SetBool, SetBool_Response
 from sklearn.preprocessing import MinMaxScaler
 
@@ -125,7 +125,7 @@ class Agent:
             with torch.no_grad():
                 action_values = self.qnetwork(state)
             action_index = torch.argmax(action_values).item()
-            rospy.loginfo(f"Predicted action values: {action_values}, Chosen action: {action_index}")
+            print(f"Predicted action values: {action_values}, Chosen action: {action_index}")
             return action_index
         else:
             return random.choice(range(self.action_size))
@@ -235,6 +235,8 @@ class GridWorldEnv(Node):  # Inherit from Node
         thruster_size = config['environment']['thruster_size']
 
         # Initialize joint positions for servos
+        self.joint_angles_port = 0.0
+        self.joint_angles_starboard = 0.0
         self.joint_angles = np.zeros(self.servo_joints_size)
         self.thruster_commands = np.zeros(thruster_size)
         self.joint_positions_history = np.zeros((self.servo_history_length, self.servo_joints_size))
@@ -243,7 +245,7 @@ class GridWorldEnv(Node):  # Inherit from Node
         self.thruster_action = np.zeros(self.servo_joints_size)
 
         # ROS node initialization (this is now handled by the Node class inheritance)
-        self.thruster_action_pub = self.create_publisher(Int32MultiArray, '/thruster_action', 10)
+        self.thruster_action_pub = self.create_publisher(Int16MultiArray, '/race2_auv/vector_thruster_direction', 10)
         
         # Initialize the policy control state
         self.use_policy = True
@@ -256,34 +258,39 @@ class GridWorldEnv(Node):  # Inherit from Node
         self.create_service(SetBool, '/save_policy', self.save_policy_service)
         
         # Subscriptions
-        self.create_subscription(JointState, '/race2/control/servos/joint_states', self.update_joint_states, 10)
-        self.create_subscription(Float64, '/race2/control/thruster/heave_bow', self.update_thrust_heave_bow, 10)
-        self.create_subscription(Float64, '/race2/control/thruster/surge_port', self.update_thrust_surge_port, 10)
-        self.create_subscription(Float64, '/race2/control/thruster/surge_starboard', self.update_thrust_surge_starboard, 10)
-        self.create_subscription(Float64, '/race2/control/thruster/sway_stern', self.update_thrust_sway_stern, 10)
+        self.create_subscription(Float64, '/race2_auv/control/surge_port_servo', self.update_joint_port, 10)
+        self.create_subscription(Float64, '/race2_auv/control/surge_starboard_servo', self.update_joint_starboard, 10)
+        self.create_subscription(Float64, '/race2_auv/control/thruster/heave_bow', self.update_thrust_heave_bow, 10)
+        self.create_subscription(Float64, '/race2_auv/control/thruster/surge_port', self.update_thrust_surge_port, 10)
+        self.create_subscription(Float64, '/race2_auv/control/thruster/surge_starboard', self.update_thrust_surge_starboard, 10)
+        self.create_subscription(Float64, '/race2_auv/control/thruster/sway_stern', self.update_thrust_sway_stern, 10)
         
         # Reset the environment
         self.reset()
-
-    # Service callback to save the policy manually
-    def save_policy_service(self, request):
+    
+    def save_policy_service(self, request, response):
         """Service callback to save the policy manually."""
         self.stop_training = True  # Set training to stop
-        return SetBoolResponse(success=True, message="Training stopped, policy will be saved.")
+        response.success = True
+        response.message = "Training stopped, policy will be saved."
+        return response
 
-    def toggle_policy_service(self, request):
+    def toggle_policy_service(self, request, response):
         """Service callback to enable/disable policy use."""
         self.use_policy = request.data
 
         if not self.use_policy:
             # If the policy is disabled, set stop_training flag to True to stop the training loop
             self.stop_training = True
-            # Also send the thruster command [1, 1, 1, 1, 1, 1]
-            thruster_command = Int32MultiArray(data=[1, 1, 1, 1, 1, 1])
+            # Also send the thruster command [1, 1]
+            thruster_command = Int16MultiArray()
+            thruster_command.data = [1, 1]
             self.thruster_action_pub.publish(thruster_command)
-            self.get_logger().info("Policy disabled. Thruster set to [1, 1, 1, 1, 1, 1] and training stopped.")
+            self.get_logger().info("Policy disabled. Thruster set to [1, 1] and training stopped.")
 
-        return SetBoolResponse(success=True, message="Policy control and training updated")
+        response.success = True
+        response.message = "Policy control and training updated."
+        return response
 
     # def update_current_error(self, data):
     #     self.position_err = np.array([data.position.z ])
@@ -388,11 +395,18 @@ class GridWorldEnv(Node):  # Inherit from Node
         self.v_setpoint = raw_v_setpoint
         self.omega_ref_setpoint = raw_omega_ref_setpoint
 
-    def update_joint_states(self, data):
-        self.joint_angles = np.array(data.position[:2])
+    def update_joint_port(self, data):
+        self.joint_angles_port = data.data
+
+    def update_joint_starboard(self, data):
+        self.joint_angles_starboard = data.data
+
+    def update_joints(self):
+        self.joint_angles = [self.joint_angles_port, self.joint_angles_starboard]
 
     def update_thrust_surge_port(self, data):
         self.thrust_surge_port = data.data
+
     def update_thrust_surge_starboard(self, data):
         self.thrust_surge_starboard = data.data
 
@@ -428,7 +442,7 @@ class GridWorldEnv(Node):  # Inherit from Node
         self.thruster_action = action
         print("thruster_action:", self.thruster_action)
         # Create the array: [action1, 1, action2, 1, 1, 1]
-        thruster_command = Int32MultiArray(data=[action1, 1, action2, 1, 1, 1])
+        thruster_command = Int16MultiArray(data=[action1, action2])
 
         # Publish the action array
         self.thruster_action_pub.publish(thruster_command)
@@ -692,7 +706,7 @@ def continuous_learning(env, agent, config):
             if done:
                 break
 
-            rate.sleep()  # Sleep to maintain loop rate
+            # rate.sleep()
 
         # 8. Decay epsilon after each episode
         epsilon = max(epsilon_min, epsilon_decay * epsilon)
@@ -733,11 +747,11 @@ def continuous_learning(env, agent, config):
     print("Training complete. Continuing to run with the learned policy.")
 
     # Run indefinitely using the learned (greedy) policy
-    while not rclpy.ok():
+    while rclpy.ok():
         state = env.reset()
         done = False
         total_reward = 0
-        while not done and not rclpy.ok():
+        while not done and rclpy.ok():
             # Greedy action (no exploration)
             action_index = agent.act(state, epsilon=0.0)
             next_state, reward, done, _ = env.step(action_index)

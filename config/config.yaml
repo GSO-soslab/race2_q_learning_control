@@ -78,7 +78,7 @@ training:
   target_avg_reward: 20  # Target average reward for early stopping
   plot_interval: 2    # Interval for updating plots during training
   random_seed: 42      # Random seed for reproducibility
-  publish_interval: 50 # 10 secs if controller frq is 5Hz  
+  publish_interval: 10 # 10 secs if controller frq is 5Hz  
 
 evaluation:
   num_episodes: 10     # Number of episodes for evaluation
