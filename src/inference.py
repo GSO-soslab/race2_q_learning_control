@@ -4,13 +4,10 @@ import torch
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from mvp_msgs.msg import ControlProcess
-from sensor_msgs.msg import JointState
-from std_msgs.msg import Float64, Int32MultiArray
-from collections import deque
+from std_msgs.msg import Int16MultiArray
 from torch_dqn import GridWorldEnv
 from torch_dqn import QNetwork
-from std_srvs.srv import SetBool, SetBoolResponse  
+from std_srvs.srv import SetBool
 
 # Load configuration from config.yaml
 config_path = os.path.join(os.path.dirname(__file__), '../config/config.yaml')
@@ -52,10 +49,10 @@ class InferenceNode(Node):
         self.agent = InferenceAgent(model_path, self.state_size, self.action_size, self)
 
         # Publisher for the thruster action
-        self.thruster_action_pub = self.create_publisher(Int32MultiArray, '/thruster_action', 10)
+        self.thruster_action_pub = self.create_publisher(Int16MultiArray, '/thruster_action', 10)
 
         # Service to enable/disable inference
-        self.create_service(SetBool, '/enable_inference', self.toggle_inference_service)
+        self.create_service(SetBool, 'enable_inference', self.toggle_inference_service)
 
         # Timer for the inference loop
         self.timer = self.create_timer(0.2, self.run_inference)  # 5 Hz loop rate
@@ -76,7 +73,7 @@ class InferenceNode(Node):
 
     def toggle_policy(self, enable_policy):
         """Calls the /toggle_policy service to enable or disable the policy."""
-        client = self.create_client(SetBool, '/toggle_policy')
+        client = self.create_client(SetBool, 'toggle_policy')
         while not client.wait_for_service(timeout_sec=1.0):
             self.get_logger().warn("Waiting for /toggle_policy service...")
         
@@ -85,7 +82,7 @@ class InferenceNode(Node):
         
         future = client.call_async(request)
         rclpy.spin_until_future_complete(self, future)
-        
+        print("Toggle policy check")
         if future.result() is not None:
             if future.result().success:
                 self.get_logger().info(f"Service call succeeded: {future.result().message}")
@@ -118,11 +115,11 @@ class InferenceNode(Node):
             self.toggle_policy(False)
             self.get_logger().info(f"Episode {self.episode} completed with total reward: {total_reward}")
         else:
-            self.get_logger().info("Inference disabled, publishing thruster command [1, 1, 1, 1, 1, 1]")
+            self.get_logger().info("Inference disabled, publishing thruster command [1, 1]")
 
             # Create the thruster command message
-            thruster_command = Int32MultiArray()
-            thruster_command.data = [1, 1, 1, 1, 1, 1]
+            thruster_command = Int16MultiArray()
+            thruster_command.data = [1, 1]
 
             # Publish the thruster command
             self.thruster_action_pub.publish(thruster_command)
@@ -133,7 +130,7 @@ if __name__ == '__main__':
     
     try:
         # Get model path parameter
-        model_path = 'dqn_model_2025-01-17_11-29-50.pth'
+        model_path = 'dqn_model_2025-02-04_15-16-13.pth'
         
         # Create and spin the inference node
         node = InferenceNode(model_path)

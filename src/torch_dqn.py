@@ -252,10 +252,10 @@ class GridWorldEnv(Node):  # Inherit from Node
         self.stop_training = False
 
         # Service for enabling/disabling the policy
-        self.create_service(SetBool, '/toggle_policy', self.toggle_policy_service)
+        self.create_service(SetBool, 'toggle_policy', self.toggle_policy_service)
         
         # Service for saving the policy manually
-        self.create_service(SetBool, '/save_policy', self.save_policy_service)
+        self.create_service(SetBool, 'save_policy', self.save_policy_service)
         
         # Subscriptions
         self.create_subscription(Float64, '/race2_auv/control/surge_port_servo', self.update_joint_port, 10)

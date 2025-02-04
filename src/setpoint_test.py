@@ -1,166 +1,102 @@
-#!/usr/bin/env python
-
-import rospy
+import rclpy,time
+from rclpy.node import Node
 from std_msgs.msg import Header
 from geometry_msgs.msg import Vector3
 from mvp_msgs.msg import ControlProcess  # Custom message type
 
+class CustomSetPointPublisher(Node):
 
-def publisher():
-    rospy.init_node('custom_set_point_publisher', anonymous=True)
+    def __init__(self):
+        super().__init__('custom_set_point_publisher')
 
-    # Define publisher for the custom topic
-    set_point_pub = rospy.Publisher('/race2/controller/process/set_point', ControlProcess, queue_size=10)
+        # Define publisher for the custom topic
+        self.set_point_pub = self.create_publisher(ControlProcess, '/race2_auv/controller/process/set_point', 10)
 
-    # Parameters
-    frame_id_value = "race2/world_ned"
-    control_mode_value = "hold_dof"
+        # Parameters
+        self.frame_id_value = "race2_auv/world_ned"
+        self.control_mode_value = "4dof"
+        self.child_frame_id = "race2_auv/base_link"
+        # Reset values
+        self.reset_position = Vector3(x=0.0, y=0.0, z=0.0)
+        self.reset_orientation = Vector3(x=0.0, y=0.0, z=0.0)
+        self.reset_velocity = Vector3(x=0.0, y=0.0, z=0.0)
+        self.reset_angular_rate = Vector3(x=0.0, y=0.0, z=0.0)
 
-    # # Desired set points
-    # position_value = Vector3(0.0, 0.0, 5.0) # x, y, z
-    # orientation_value = Vector3(0.0, 0.0, -0.6) # phi, theta, psi
-    # velocity_value = Vector3(0.25, 0.0, 0.0) # u, v, w
-    # angular_rate_value = Vector3(0.0, 0.0, 0.0) # p, q, r
+        # Timing parameters (retrieved from parameters)
+        self.reset1_duration = self.declare_parameter("reset1_duration", 2).get_parameter_value().integer_value
+        self.set_point_duration = self.declare_parameter("set_point_duration", 300).get_parameter_value().integer_value
+        self.reset2_duration = self.declare_parameter("reset2_duration", 2).get_parameter_value().integer_value
+        self.rate_hz = self.declare_parameter("rate_hz", 5).get_parameter_value().integer_value
 
-    # # desired setpoint set1
-    # position_value = Vector3(0.0, 0.0, 5.0) # x, y, z
-    # orientation_value = Vector3(0.0, 0.0, 0.0) # phi, theta, psi
-    # velocity_value = Vector3(0.25, 0.0, 0.0) # u, v, w
-    # angular_rate_value = Vector3(0.0, 0.0, 0.0) # p, q, r
+        self.rate = self.create_rate(self.rate_hz)
 
-    # # desired setpoint set2
-    # position_value = Vector3(0.0, 0.0, 3.0) # x, y, z
-    # orientation_value = Vector3(0.0, 0.0, -1.57) # phi, theta, psi
-    # velocity_value = Vector3(0.25, 0.0, 0.0) # u, v, w
-    # angular_rate_value = Vector3(0.0, 0.0, 0.0) # p, q, r
-
-    # # desired setpoint set3
-    # position_value = Vector3(0.0, 0.0, 3.0) # x, y, z
-    # orientation_value = Vector3(0.0, 0.0, 0.0) # phi, theta, psi
-    # velocity_value = Vector3(-0.25, 0.0, 0.0) # u, v, w
-    # angular_rate_value = Vector3(0.0, 0.0, 0.0) # p, q, r
-
-    # # desired setpoint set4
-    # position_value = Vector3(0.0, 0.0, 5.0) # x, y, z
-    # orientation_value = Vector3(0.0, 0.0, 1.57) # phi, theta, psi
-    # velocity_value = Vector3(-0.25, 0.0, 0.0) # u, v, w
-    # angular_rate_value = Vector3(0.0, 0.0, 0.0) # p, q, r
-
-    # # desired setpoint set5
-    # position_value = Vector3(0.0, 0.0, 5.0) # x, y, z
-    # orientation_value = Vector3(0.0, 0.0, 0.0) # phi, theta, psi
-    # velocity_value = Vector3(0.25, 0.0, 0.0) # u, v, w
-    # angular_rate_value = Vector3(0.0, 0.0, 0.0) # p, q, r
-
-    # Reset values
-    reset_position = Vector3(0.0, 0.0, 0.0)
-    reset_orientation = Vector3(0.0, 0.0, 0.0)
-    reset_velocity = Vector3(0.0, 0.0, 0.0)
-    reset_angular_rate = Vector3(0.0, 0.0, 0.0)
-
-    # Timing parameters
-    reset1_duration = rospy.get_param("~reset1_duration", 10)  # Default 10 seconds
-    set_point_duration = rospy.get_param("~set_point_duration", 300)  # Default 300 seconds
-    reset2_duration = rospy.get_param("~reset2_duration", 10)  # Default 10 seconds
-    rate_hz = rospy.get_param("~rate_hz", 1)  # Default 10 Hz
-
-    rate = rospy.Rate(rate_hz)
-
-    def publish_values(position, orientation, velocity, angular_rate, duration):
+    def publish_values(self, position, orientation, velocity, angular_rate, duration):
         """Helper function to publish specified values for a given duration."""
-        for _ in range(int(duration * rate_hz)):
+        start_time = self.get_clock().now().seconds_nanoseconds()[0]
+        end_time = start_time + duration
+        
+        while self.get_clock().now().seconds_nanoseconds()[0] < end_time:
             msg = ControlProcess()
             msg.header = Header()
-            msg.header.stamp = rospy.Time.now()
-            msg.header.frame_id = frame_id_value
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.header.frame_id = self.frame_id_value
+            msg.child_frame_id = self.child_frame_id
 
-            msg.control_mode = control_mode_value
+            msg.control_mode = self.control_mode_value
             msg.position = position
             msg.orientation = orientation
             msg.velocity = velocity
             msg.angular_rate = angular_rate
 
-            set_point_pub.publish(msg)
-            rate.sleep()
+            # Publish the message
+            self.set_point_pub.publish(msg)
+            # self.get_logger().info(f"Published message at {msg.header.stamp}")
+            # rclpy.spin_once(self) 
+            time.sleep(1.0 / self.rate_hz)  # Sleep to maintain the desired frequency
 
-    # Episode 1: Publish reset values
-    rospy.loginfo("Publishing reset values for %d seconds", reset1_duration)
-    publish_values(reset_position, reset_orientation, reset_velocity, reset_angular_rate, reset1_duration)
+            
+    def run(self):
+        # Episode 1: Publish reset values
+        self.get_logger().info(f"Publishing reset values for {self.reset1_duration} seconds")
+        self.publish_values(self.reset_position, self.reset_orientation, self.reset_velocity, self.reset_angular_rate, self.reset1_duration)
 
-    # # Episode 2: Publish desired set points
-    # rospy.loginfo("Publishing set point values for %d seconds", set_point_duration)
-    # publish_values(position_value, orientation_value, velocity_value, angular_rate_value, set_point_duration)
+        # Episode 2: Publish desired set points in sequence
+        self.get_logger().info("Publishing setpoint 1 for 50 seconds")
+        self.publish_values(Vector3(x=0.0, y=0.0, z=5.0), Vector3(x=0.0, y=0.0, z=0.0), Vector3(x=0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 50)
 
-    # Episode 2: Publish desired set points in sequence
-    rospy.loginfo("Publishing setpoint 1 for 100 seconds")
-    ##############################
-    #     _  _
-    #    |    | 
-    ##############################
-    publish_values(Vector3(0.0, 0.0, 5.0), Vector3(0.0, 0.0, 0.0), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 50)
+        self.get_logger().info("Publishing setpoint 2 for 50 seconds")
+        self.publish_values(Vector3(x=0.0, y=0.0, z=3.0), Vector3(x=0.0, y=0.0, z=1.57), Vector3(x=0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 50)
 
+        self.get_logger().info("Publishing setpoint 3 for 50 seconds")
+        self.publish_values(Vector3(x=0.0, y=0.0, z=3.0), Vector3(x=0.0, y=0.0, z=3.14), Vector3(x=0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 50)
 
+        self.get_logger().info("Publishing setpoint 3/1 for 50 seconds")
+        self.publish_values(Vector3(x=0.0, y=0.0, z=3.0), Vector3(x=0.0, y=0.0, z=3.14), Vector3(x=-0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 50)
 
+        self.get_logger().info("Publishing setpoint 3/2 for 100 seconds")
+        self.publish_values(Vector3(x=0.0, y=0.0, z=3.0), Vector3(x=0.0, y=0.0, z=3.14), Vector3(x=0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 100)
 
-    rospy.loginfo("Publishing setpoint 2 for 30 seconds")
-    ##############################
-    # __
-    #   |
-    # __|  
-    ##############################
-    publish_values(Vector3(0.0, 0.0, 3.0), Vector3(0.0, 0.0, 1.57), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 50)
+        self.get_logger().info("Publishing setpoint 4 for 50 seconds")
+        self.publish_values(Vector3(x=0.0, y=0.0, z=5.0), Vector3(x=0.0, y=0.0, z=-1.57), Vector3(x=0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 50)
 
+        self.get_logger().info("Publishing setpoint 5 for 50 seconds")
+        self.publish_values(Vector3(x=0.0, y=0.0, z=5.0), Vector3(x=0.0, y=0.0, z=0.0), Vector3(x=0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 50)
 
+        # Episode 3: Publish reset values again
+        self.get_logger().info(f"Publishing reset values for {self.reset2_duration} seconds")
+        self.publish_values(self.reset_position, self.reset_orientation, self.reset_velocity, self.reset_angular_rate, self.reset2_duration)
 
-
-    rospy.loginfo("Publishing setpoint 3 for 30 seconds")
-    ##############################
-    # |    |
-    #  _  _
-    ##############################
-    publish_values(Vector3(0.0, 0.0, 3.0), Vector3(0.0, 0.0, 3.14), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 50)
-
-
+        self.get_logger().info("All episodes completed. Node will now stop.")
 
 
-    rospy.loginfo("Publishing setpoint 3/1 for 30 seconds")
-    
-    publish_values(Vector3(0.0, 0.0, 3.0), Vector3(0.0, 0.0, 3.14), Vector3(-0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 50)
+def main(args=None):
+    rclpy.init(args=args)
 
+    publisher = CustomSetPointPublisher()
+    publisher.run()
 
-    rospy.loginfo("Publishing setpoint 3/2 for 30 seconds")
-    
-    publish_values(Vector3(0.0, 0.0, 3.0), Vector3(0.0, 0.0, 3.14), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 100)
-
-
-    rospy.loginfo("Publishing setpoint 4 for 30 seconds")
-    ##############################
-    #   __
-    # |  
-    # | __
-    ##############################
-    publish_values(Vector3(0.0, 0.0, 5.0), Vector3(0.0, 0.0, -1.57), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 50)
-
-
-
-    rospy.loginfo("Publishing setpoint 5 for 50 seconds")
-    ##############################
-    #  _  _
-    # |    | 
-    ##############################
-    publish_values(Vector3(0.0, 0.0, 5.0), Vector3(0.0, 0.0, 0.0), Vector3(0.25, 0.0, 0.0), Vector3(0.0, 0.0, 0.0), 50)
-
-
-
-    # Episode 3: Publish reset values again
-    rospy.loginfo("Publishing reset values for %d seconds", reset2_duration)
-    publish_values(reset_position, reset_orientation, reset_velocity, reset_angular_rate, reset2_duration)
-
-    rospy.loginfo("All episodes completed. Node will now stop.")
+    rclpy.shutdown()
 
 
 if __name__ == '__main__':
-    try:
-        publisher()
-    except rospy.ROSInterruptException:
-        pass
+    main()
