@@ -54,7 +54,7 @@ class InferenceNode(Node):
         self.default_thruster_command = [1, 1]
         
         # Declare and get parameters
-        self.declare_parameter('model_path', 'dqn_model_2025-02-04_15-16-13.pth')
+        self.declare_parameter('model_path', 'dqn_model_2025-02-05_16-53-16.pth')
         model_path = self.get_parameter('model_path').get_parameter_value().string_value
 
         # Create QoS profile for better reliability
@@ -110,7 +110,8 @@ class InferenceNode(Node):
         msg = Int16MultiArray()
         msg.data = self.default_thruster_command
         self.thruster_action_pub.publish(msg)
-
+        self.get_logger().info(f"Published default thruster command: {self.default_thruster_command}")
+        
     def toggle_inference_callback(self, request, response):
         """Service callback to enable/disable inference."""
         prev_state = self.inference_enabled

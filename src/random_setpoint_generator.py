@@ -1,105 +1,122 @@
-#!/usr/bin/env python
-import rospy
+#!/usr/bin/env python3
+import rclpy
+from rclpy.node import Node
 import random
 import time
 from std_msgs.msg import Header
 from geometry_msgs.msg import Vector3
-from mvp_msgs.msg import ControlProcess  # Custom message type
+from mvp_msgs.msg import ControlProcess
 
+class CustomSetPointPublisher(Node):
+    def __init__(self):
+        super().__init__('custom_set_point_publisher')
+        
+        # Define publisher for the custom topic
+        self.set_point_pub = self.create_publisher(
+            ControlProcess,
+            '/race2_auv/controller/process/set_point',
+            10
+        )
+        
+        # Declare parameters with default values
+        self.declare_parameter('random_duration', 120)
+        self.declare_parameter('rate_hz', 10.0)
+        
+        # Parameters
+        self.frame_id_value = "race2_auv/world_ned"
+        self.child_frame_id = "race2_auv/cg_link"  # Added this based on your code
+        self.control_mode_value = "4dof"
+        self.rate_hz = self.get_parameter('rate_hz').value
+        
+        # Stable values to revert to or to use when a field is not being varied
+        self.stable_position = Vector3(x=0.0, y=0.0, z=4.0)
+        self.stable_orientation = Vector3(x=3.14, y=0.0, z=0.0)
+        self.stable_velocity = Vector3(x=0.2, y=0.0, z=0.0)
+        self.stable_angular_rate = Vector3(x=0.0, y=0.0, z=0.0)
+        
+        # Random ranges for fields we want to vary
+        self.pos_z_min, self.pos_z_max = 4.0, 5.5
+        self.ori_z_min, self.ori_z_max = -1.5, 1.5
+        self.vel_x_min, self.vel_x_max = -0.28, 0.28
 
-def publisher():
-    rospy.init_node('custom_set_point_publisher', anonymous=True)
-
-    # Define publisher for the custom topic
-    set_point_pub = rospy.Publisher('/race2/controller/process/set_point', ControlProcess, queue_size=10)
-
-    # Parameters
-    frame_id_value = "race2/world_ned"
-    control_mode_value = "hold_dof"
-
-    # Stable values to revert to or to use when a field is not being varied
-    stable_position = Vector3(0.0, 0.0, 4.0)  
-    stable_orientation = Vector3(0.0, 0.0, 0.0) 
-    stable_velocity = Vector3(0.2, 0.0, 0.0)   
-    stable_angular_rate = Vector3(0.0, 0.0, 0.0)
-
-    # Random ranges for fields we want to vary:
-    pos_z_min, pos_z_max = 4.0, 5.5
-    ori_z_min, ori_z_max = -1.5, 1.5
-    vel_x_min, vel_x_max = -0.28, 0.28
-
-    # Time parameters
-    random_duration = rospy.get_param("~random_duration",60)
-    rate_hz = rospy.get_param("~rate_hz", 10.0)
-    rate = rospy.Rate(rate_hz)
-
-    # Pattern definition:
-    # 0: vary position.z & orientation.z, keep velocity stable
-    # 1: vary orientation.z & velocity.x, keep position stable
-    # 2: vary position.z & velocity.x, keep orientation stable
-    period_index = 0
-
-    while not rospy.is_shutdown():
-        # Start of a new period
-        period_start_time = rospy.Time.now().to_sec()
-
-        # Set base values (start from stable)
-        current_position = Vector3(stable_position.x, stable_position.y, stable_position.z)
-        current_orientation = Vector3(stable_orientation.x, stable_orientation.y, stable_orientation.z)
-        current_velocity = Vector3(stable_velocity.x, stable_velocity.y, stable_velocity.z)
-        current_angular_rate = Vector3(stable_angular_rate.x, stable_angular_rate.y, stable_angular_rate.z)
-
-        # Randomize the two fields for this period ONCE
-        if period_index == 0:
-            # Vary position.z and orientation.z
-            current_position.z = random.uniform(pos_z_min, pos_z_max)
-            current_orientation.z = random.uniform(ori_z_min, ori_z_max)
-            # velocity stays stable
-        elif period_index == 1:
-            # Vary orientation.z and velocity.x
-            current_orientation.z = random.uniform(ori_z_min, ori_z_max)
-            current_velocity.x = random.uniform(vel_x_min, vel_x_max)
-            # position stays stable
-        else:
-            # period_index == 2
-            # Vary position.z and velocity.x
-            current_position.z = random.uniform(pos_z_min, pos_z_max)
-            current_velocity.x = random.uniform(vel_x_min, vel_x_max)
-            # orientation stays stable
-
-        # Now publish the SAME values for the entire random_duration
-        while not rospy.is_shutdown():
-            current_time = rospy.Time.now().to_sec()
-            elapsed = current_time - period_start_time
-
-            if elapsed > random_duration:
-                # Time for this period is up
-                break
-
-            # Create the message
+    def publish_values(self, position, orientation, velocity, angular_rate, duration):
+        """Helper function to publish specified values for a given duration."""
+        start_time = self.get_clock().now().seconds_nanoseconds()[0]
+        end_time = start_time + duration
+        
+        while self.get_clock().now().seconds_nanoseconds()[0] < end_time:
             msg = ControlProcess()
             msg.header = Header()
-            msg.header.stamp = rospy.Time.now()
-            msg.header.frame_id = frame_id_value
-            msg.control_mode = control_mode_value
-
-            # Assign the previously chosen random (or stable) values
-            msg.position = current_position
-            msg.orientation = current_orientation
-            msg.velocity = current_velocity
-            msg.angular_rate = current_angular_rate
-
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.header.frame_id = self.frame_id_value
+            msg.child_frame_id = self.child_frame_id
+            msg.control_mode = self.control_mode_value
+            msg.position = position
+            msg.orientation = orientation
+            msg.velocity = velocity
+            msg.angular_rate = angular_rate
+            
             # Publish the message
-            set_point_pub.publish(msg)
+            self.set_point_pub.publish(msg)
+            time.sleep(1.0 / self.rate_hz)  # Sleep to maintain the desired frequency
 
-            rate.sleep()
+    def run(self):
+        """Main run loop implementing the publishing patterns."""
+        period_index = 0
+        random_duration = self.get_parameter('random_duration').value
 
-        # Move to the next pattern after one period
-        period_index = (period_index + 1) % 3
+        while rclpy.ok():
+            # Set base values (start from stable)
+            current_position = Vector3(x=self.stable_position.x, 
+                                     y=self.stable_position.y, 
+                                     z=self.stable_position.z)
+            current_orientation = Vector3(x=self.stable_orientation.x,
+                                        y=self.stable_orientation.y,
+                                        z=self.stable_orientation.z)
+            current_velocity = Vector3(x=self.stable_velocity.x,
+                                     y=self.stable_velocity.y,
+                                     z=self.stable_velocity.z)
+            current_angular_rate = Vector3(x=self.stable_angular_rate.x,
+                                         y=self.stable_angular_rate.y,
+                                         z=self.stable_angular_rate.z)
+            
+            # Randomize fields based on current period
+            if period_index == 0:
+                # Vary position.z and orientation.z
+                current_position.z = random.uniform(self.pos_z_min, self.pos_z_max)
+                current_orientation.z = random.uniform(self.ori_z_min, self.ori_z_max)
+            elif period_index == 1:
+                # Vary orientation.z and velocity.x
+                current_orientation.z = random.uniform(self.ori_z_min, self.ori_z_max)
+                current_velocity.x = random.uniform(self.vel_x_min, self.vel_x_max)
+            else:  # period_index == 2
+                # Vary position.z and velocity.x
+                current_position.z = random.uniform(self.pos_z_min, self.pos_z_max)
+                current_velocity.x = random.uniform(self.vel_x_min, self.vel_x_max)
+            
+            # Publish these values for the duration
+            self.publish_values(
+                current_position,
+                current_orientation,
+                current_velocity,
+                current_angular_rate,
+                random_duration
+            )
 
+            # Move to next pattern
+            period_index = (period_index + 1) % 3
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = CustomSetPointPublisher()
+    
+    try:
+        node.run()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 if __name__ == '__main__':
-    try:
-        publisher()
-    except rospy.ROSInterruptException:
-        pass
+    main()
