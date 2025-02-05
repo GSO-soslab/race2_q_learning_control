@@ -1,29 +1,32 @@
 import os
 import yaml
 import torch
-import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.qos import QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Int16MultiArray
+from std_srvs.srv import SetBool
 from torch_dqn import GridWorldEnv
 from torch_dqn import QNetwork
-from std_srvs.srv import SetBool
 
 # Load configuration from config.yaml
 config_path = os.path.join(os.path.dirname(__file__), '../config/config.yaml')
 with open(config_path, 'r') as f:
     config = yaml.safe_load(f)
 
+
 class InferenceAgent:
-    def __init__(self, model_path, state_size, action_size, node):
+    def __init__(self, model_path, state_size, action_size, logger):
+        self.logger = logger
+        
         # Load the trained Q-network
-        self.node = node
         self.qnetwork = QNetwork(state_size, action_size, config['qnetwork']['hidden_layers'])
         try:
             self.qnetwork.load_state_dict(torch.load(model_path))
             self.qnetwork.eval()  # Set the network to evaluation mode (no training)
         except Exception as e:
-            self.node.get_logger().error(f"Failed to load model from {model_path}: {e}")
+            self.logger.error(f"Failed to load model from {model_path}: {e}")
             raise
 
     def act(self, state):
@@ -32,113 +35,166 @@ class InferenceAgent:
         with torch.no_grad():
             action_values = self.qnetwork(state)
         action_index = torch.argmax(action_values).item()
-        self.node.get_logger().info(f"Predicted action values: {action_values}, Chosen action: {action_index}")
         return action_index
 
+
 class InferenceNode(Node):
-    def __init__(self, model_path):
+    def __init__(self):
         super().__init__('inference_node')
         
-        # Create the environment with the config
+        # Create callback group for services
+        self.callback_group = ReentrantCallbackGroup()
+        
+        # Initialize inference_enabled as False by default
+        self.inference_enabled = False
+        self.current_state = None
+        self.done = False
+        
+        # Default thruster command when inference is disabled
+        self.default_thruster_command = [1, 1]
+        
+        # Declare and get parameters
+        self.declare_parameter('model_path', 'dqn_model_2025-02-04_15-16-13.pth')
+        model_path = self.get_parameter('model_path').get_parameter_value().string_value
+
+        # Create QoS profile for better reliability
+        qos_profile = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            depth=10
+        )
+
+        # Initialize environment and agent
         self.env = GridWorldEnv(config)
-        self.state_size = self.env.state_size
-        self.action_size = self.env.action_size
-        self.inference_enabled = True
+        self.agent = InferenceAgent(
+            model_path, 
+            self.env.state_size, 
+            self.env.action_size,
+            self.get_logger()
+        )
+        
+        # Create publisher for thruster action
+        self.thruster_action_pub = self.create_publisher(
+            Int16MultiArray,
+            '/race2_auv/vector_thruster_direction',
+            qos_profile
+        )
 
-        # Create the inference agent
-        self.agent = InferenceAgent(model_path, self.state_size, self.action_size, self)
+        # Create service for toggling inference with callback group
+        self.toggle_service = self.create_service(
+            SetBool,
+            '/enable_inference',
+            self.toggle_inference_callback,
+            callback_group=self.callback_group
+        )
 
-        # Publisher for the thruster action
-        self.thruster_action_pub = self.create_publisher(Int16MultiArray, '/thruster_action', 10)
+        # Create client for toggle policy service
+        self.toggle_policy_client = self.create_client(
+            SetBool,
+            '/toggle_policy',
+            callback_group=self.callback_group
+        )
 
-        # Service to enable/disable inference
-        self.create_service(SetBool, 'enable_inference', self.toggle_inference_service)
-
-        # Timer for the inference loop
-        self.timer = self.create_timer(0.2, self.run_inference)  # 5 Hz loop rate
+        # Create timer for main loop with callback group
+        self.timer = self.create_timer(
+            0.2,  # 5Hz rate
+            self.inference_loop,
+            callback_group=self.callback_group
+        )
+        
         self.episode = 0
+        self.total_reward = 0
+        self.get_logger().info('Inference node initialized with inference disabled')
 
-    def toggle_inference_service(self, request, response):
+    def publish_default_thruster_command(self):
+        """Publish the default thruster command."""
+        msg = Int16MultiArray()
+        msg.data = self.default_thruster_command
+        self.thruster_action_pub.publish(msg)
+
+    def toggle_inference_callback(self, request, response):
         """Service callback to enable/disable inference."""
-        self.inference_enabled = request.data  # Enable inference if True, disable if False
-
+        prev_state = self.inference_enabled
+        self.inference_enabled = request.data
+        
         if self.inference_enabled:
+            if not prev_state:  # Only reset if we're transitioning from disabled to enabled
+                self.episode += 1
+                self.current_state = self.env.reset()
+                self.done = False
+                self.total_reward = 0
+                self.get_logger().info(f"Starting Episode {self.episode}")
+                self.toggle_policy(True)
             self.get_logger().info("Inference enabled.")
         else:
+            if prev_state:  # Only cleanup if we're transitioning from enabled to disabled
+                self.toggle_policy(False)
+                self.current_state = None
+                self.done = True
             self.get_logger().info("Inference disabled.")
-
+            # Publish default thruster command immediately when disabling
+            self.publish_default_thruster_command()
+        
         response.success = True
         response.message = "Inference state updated."
         return response
 
     def toggle_policy(self, enable_policy):
         """Calls the /toggle_policy service to enable or disable the policy."""
-        client = self.create_client(SetBool, 'toggle_policy')
-        while not client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().warn("Waiting for /toggle_policy service...")
-        
+        if not self.toggle_policy_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn('/toggle_policy service not available')
+            return False
+
         request = SetBool.Request()
         request.data = enable_policy
-        
-        future = client.call_async(request)
-        rclpy.spin_until_future_complete(self, future)
-        print("Toggle policy check")
-        if future.result() is not None:
-            if future.result().success:
-                self.get_logger().info(f"Service call succeeded: {future.result().message}")
-            else:
-                self.get_logger().warn(f"Service call failed: {future.result().message}")
-        else:
-            self.get_logger().error("Service call failed.")
 
-    def run_inference(self):
-        if self.inference_enabled:  # Check if inference is enabled
-            self.episode += 1
-            state = self.env.reset()
-            done = False
-            total_reward = 0
+        try:
+            future = self.toggle_policy_client.call_async(request)
+            return True
+        except Exception as e:
+            self.get_logger().error(f"Service call failed: {e}")
+            return False
 
-            self.get_logger().info(f"Starting Episode {self.episode}")
-            
-            # Enable the policy at the start of the episode
-            self.toggle_policy(True)
+    def inference_loop(self):
+        """Main inference loop."""
+        if not self.inference_enabled:
+            # Publish default thruster command
+            self.publish_default_thruster_command()
+            return
 
-            while not done and rclpy.ok() and self.inference_enabled:
-                # Get action from the policy
-                action_index = self.agent.act(state)
-                # Take the action in the environment
-                next_state, reward, done, _ = self.env.step(action_index)
-                state = next_state
-                total_reward += reward
+        if self.current_state is not None and not self.done:
+            # Get action from the policy
+            action_index = self.agent.act(self.current_state)
+            # Take the action in the environment
+            next_state, reward, done, _ = self.env.step(action_index)
+            self.current_state = next_state
+            self.total_reward += reward
+            self.done = done
 
-            # Disable the policy at the end of every episode
-            self.toggle_policy(False)
-            self.get_logger().info(f"Episode {self.episode} completed with total reward: {total_reward}")
-        else:
-            self.get_logger().info("Inference disabled, publishing thruster command [1, 1]")
+            if self.done:
+                self.get_logger().info(f"Episode {self.episode} completed with total reward: {self.total_reward}")
+                if self.inference_enabled:  # Only start new episode if still enabled
+                    self.episode += 1
+                    self.current_state = self.env.reset()
+                    self.done = False
+                    self.total_reward = 0
+                    self.get_logger().info(f"Starting Episode {self.episode}")
 
-            # Create the thruster command message
-            thruster_command = Int16MultiArray()
-            thruster_command.data = [1, 1]
 
-            # Publish the thruster command
-            self.thruster_action_pub.publish(thruster_command)
+def main(args=None):
+    rclpy.init(args=args)
+    
+    inference_node = InferenceNode()
+    
+    try:
+        rclpy.spin(inference_node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        # Ensure policy is disabled when shutting down
+        inference_node.toggle_policy(False)
+        inference_node.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':
-    rclpy.init()
-    
-    try:
-        # Get model path parameter
-        model_path = 'dqn_model_2025-02-04_15-16-13.pth'
-        
-        # Create and spin the inference node
-        node = InferenceNode(model_path)
-        rclpy.spin(node)
-    
-    except KeyboardInterrupt:
-        pass
-    
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
+    main()
