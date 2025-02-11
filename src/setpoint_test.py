@@ -15,7 +15,7 @@ class CustomSetPointPublisher(Node):
         # Parameters
         self.frame_id_value = "race2_auv/world_ned"
         self.control_mode_value = "4dof"
-        self.child_frame_id = "race2_auv/base_link"
+        self.child_frame_id = "race2_auv/cg_link"
         # Reset values
         self.reset_position = Vector3(x=0.0, y=0.0, z=0.0)
         self.reset_orientation = Vector3(x=3.14, y=0.0, z=0.0)
@@ -62,25 +62,25 @@ class CustomSetPointPublisher(Node):
 
         # Episode 2: Publish desired set points in sequence
         self.get_logger().info("Publishing setpoint 1 for 50 seconds")
-        self.publish_values(Vector3(x=0.0, y=0.0, z=5.0), Vector3(x=0.0, y=0.0, z=0.0), Vector3(x=0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 50)
+        self.publish_values(Vector3(x=0.0, y=0.0, z=5.0), Vector3(x=3.14, y=0.0, z=0.0), Vector3(x=0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 50)
 
         self.get_logger().info("Publishing setpoint 2 for 50 seconds")
-        self.publish_values(Vector3(x=0.0, y=0.0, z=3.0), Vector3(x=0.0, y=0.0, z=1.57), Vector3(x=0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 50)
+        self.publish_values(Vector3(x=0.0, y=0.0, z=3.0), Vector3(x=3.14, y=0.0, z=1.57), Vector3(x=0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 50)
 
         self.get_logger().info("Publishing setpoint 3 for 50 seconds")
-        self.publish_values(Vector3(x=0.0, y=0.0, z=3.0), Vector3(x=0.0, y=0.0, z=3.14), Vector3(x=0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 50)
+        self.publish_values(Vector3(x=0.0, y=0.0, z=3.0), Vector3(x=3.14, y=0.0, z=3.14), Vector3(x=0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 50)
 
         self.get_logger().info("Publishing setpoint 3/1 for 50 seconds")
-        self.publish_values(Vector3(x=0.0, y=0.0, z=3.0), Vector3(x=0.0, y=0.0, z=3.14), Vector3(x=-0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 50)
+        self.publish_values(Vector3(x=0.0, y=0.0, z=3.0), Vector3(x=3.14, y=0.0, z=3.14), Vector3(x=-0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 50)
 
         self.get_logger().info("Publishing setpoint 3/2 for 100 seconds")
-        self.publish_values(Vector3(x=0.0, y=0.0, z=3.0), Vector3(x=0.0, y=0.0, z=3.14), Vector3(x=0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 100)
+        self.publish_values(Vector3(x=0.0, y=0.0, z=3.0), Vector3(x=3.14, y=0.0, z=3.14), Vector3(x=0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 100)
 
         self.get_logger().info("Publishing setpoint 4 for 50 seconds")
-        self.publish_values(Vector3(x=0.0, y=0.0, z=5.0), Vector3(x=0.0, y=0.0, z=-1.57), Vector3(x=0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 50)
+        self.publish_values(Vector3(x=0.0, y=0.0, z=5.0), Vector3(x=3.14, y=0.0, z=-1.57), Vector3(x=0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 50)
 
         self.get_logger().info("Publishing setpoint 5 for 50 seconds")
-        self.publish_values(Vector3(x=0.0, y=0.0, z=5.0), Vector3(x=0.0, y=0.0, z=0.0), Vector3(x=0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 50)
+        self.publish_values(Vector3(x=0.0, y=0.0, z=5.0), Vector3(x=3.14, y=0.0, z=0.0), Vector3(x=0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 50)
 
         # Episode 3: Publish reset values again
         self.get_logger().info(f"Publishing reset values for {self.reset2_duration} seconds")

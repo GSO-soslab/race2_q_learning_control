@@ -703,7 +703,7 @@ def continuous_learning(env, agent, config):
     # Training Loop
     while episode_count < max_episodes and rclpy.ok():
         if env.stop_training:
-            self.get_logger().info("Service called: Saving policy and stopping training.")
+            print("Service called: Saving policy and stopping training.")
             save_model(agent)  # Save the trained model
             break  # Exit the training loop if training is stopped
 

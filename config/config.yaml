@@ -5,7 +5,7 @@ qnetwork:
   hidden_layers: [400, 400, 400]  # Hidden layers for Q-network
 
 agent:
-  buffer_size: 50000  # Maximum size of the replay buffer
+  buffer_size: 10000  # Maximum size of the replay buffer
   batch_size: 64      # Number of experiences sampled from replay buffer for training
   gamma: 0.96         # Discount factor for future rewards
   learning_rate: 0.000001  # Learning rate for the optimizer
@@ -66,15 +66,15 @@ reward_function:
     # 0.0,  # heave
     1.0,  # roll
     1.0,  # pitch
-    2.0  # yaw
+    0.3  # yaw
     # 0.0,  # angular_vel_x
     # 0.0,  # angular_vel_y
     # 0.0   # angular_vel_z
   ]
 
 training:
-  max_episodes: 100    # Maximum episodes for training
-  max_t: 20          # Maximum steps per episode
+  max_episodes: 1000    # Maximum episodes for training
+  max_t: 3          # Maximum steps per episode
   target_avg_reward: 20  # Target average reward for early stopping
   plot_interval: 2    # Interval for updating plots during training
   random_seed: 42      # Random seed for reproducibility
