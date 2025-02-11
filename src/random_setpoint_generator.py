@@ -30,7 +30,7 @@ class CustomSetPointPublisher(Node):
         
         # Stable values to revert to or to use when a field is not being varied
         self.stable_position = Vector3(x=0.0, y=0.0, z=4.0)
-        self.stable_orientation = Vector3(x=3.14, y=0.0, z=0.0)
+        self.stable_orientation = Vector3(x=0.0, y=0.0, z=0.0)
         self.stable_velocity = Vector3(x=0.2, y=0.0, z=0.0)
         self.stable_angular_rate = Vector3(x=0.0, y=0.0, z=0.0)
         

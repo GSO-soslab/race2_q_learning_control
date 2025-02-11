@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import rclpy
 from rclpy.node import Node
-
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -17,6 +17,8 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64, Int16MultiArray
 from std_srvs.srv import SetBool, SetBool_Response
 from sklearn.preprocessing import MinMaxScaler
+import threading
+
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -257,14 +259,66 @@ class GridWorldEnv(Node):  # Inherit from Node
         # Service for saving the policy manually
         self.create_service(SetBool, 'save_policy', self.save_policy_service)
         
-        # Subscriptions
-        self.create_subscription(Float64, '/race2_auv/control/surge_port_servo', self.update_joint_port, 10)
-        self.create_subscription(Float64, '/race2_auv/control/surge_starboard_servo', self.update_joint_starboard, 10)
-        self.create_subscription(Float64, '/race2_auv/control/thruster/heave_bow', self.update_thrust_heave_bow, 10)
-        self.create_subscription(Float64, '/race2_auv/control/thruster/surge_port', self.update_thrust_surge_port, 10)
-        self.create_subscription(Float64, '/race2_auv/control/thruster/surge_starboard', self.update_thrust_surge_starboard, 10)
-        self.create_subscription(Float64, '/race2_auv/control/thruster/sway_stern', self.update_thrust_sway_stern, 10)
+        # qos_profile = QoSProfile(
+        #     reliability=QoSReliabilityPolicy.BEST_EFFORT,  
+        #     history=QoSHistoryPolicy.KEEP_LAST,
+        #     depth=10
+        # )
         
+        # Subscriptions
+        self.subscription = self.create_subscription(
+                                ControlProcess, 
+                                '/race2_auv/controller/process/error', 
+                                self.update_current_error, 
+                                10)
+        
+        # self.subscription = self.create_subscription(
+        #     ControlProcess, 
+        #     '/race2_auv/controller/process/error', 
+        #     self.update_current_error, 
+        #     qos_profile
+        # )
+
+        self.subscription = self.create_subscription(
+                                ControlProcess, 
+                                '/race2_auv/controller/process/setpoint', 
+                                self.update_current_setpoint, 
+                                10)
+        
+        self.create_subscription(ControlProcess, 
+                                 '/race2_auv/controller/process/state', 
+                                 self.update_current_state, 
+                                 10)
+        
+        self.create_subscription(Float64, 
+                                 '/race2_auv/control/surge_port_servo', 
+                                 self.update_joint_port, 
+                                 10)
+        
+        self.create_subscription(Float64, 
+                                 '/race2_auv/control/surge_starboard_servo', 
+                                 self.update_joint_starboard, 
+                                 10)
+                                 
+        self.create_subscription(Float64, 
+                                 '/race2_auv/control/thruster/heave_bow', 
+                                 self.update_thrust_heave_bow, 
+                                 10)
+        
+        self.create_subscription(Float64, 
+                                 '/race2_auv/control/thruster/surge_port', 
+                                 self.update_thrust_surge_port, 
+                                 10)
+        
+        self.create_subscription(Float64, 
+                                 '/race2_auv/control/thruster/surge_starboard', 
+                                 self.update_thrust_surge_starboard, 
+                                 10)
+        
+        self.create_subscription(Float64, 
+                                 '/race2_auv/control/thruster/sway_stern', 
+                                 self.update_thrust_sway_stern, 
+                                 10)
         # Reset the environment
         self.reset()
     
@@ -397,9 +451,11 @@ class GridWorldEnv(Node):  # Inherit from Node
 
     def update_joint_port(self, data):
         self.joint_angles_port = data.data
+        self.update_joints()
 
     def update_joint_starboard(self, data):
         self.joint_angles_starboard = data.data
+        self.update_joints()
 
     def update_joints(self):
         self.joint_angles = [self.joint_angles_port, self.joint_angles_starboard]
@@ -440,8 +496,7 @@ class GridWorldEnv(Node):  # Inherit from Node
         action = self.action_mapping[action_index]
         action1, action2 = action  # Unpack the action values
         self.thruster_action = action
-        print("thruster_action:", self.thruster_action)
-        # Create the array: [action1, 1, action2, 1, 1, 1]
+        # Create the array: [action1, action2]
         thruster_command = Int16MultiArray(data=[action1, action2])
 
         # Publish the action array
@@ -542,7 +597,6 @@ class GridWorldEnv(Node):  # Inherit from Node
 
         # Accumulate the smoothness penalty
         servo_smoothness_penalty = np.linalg.norm(delta_theta)
-
         # Update joint_positions_history
         self.joint_positions_history = np.vstack((self.joint_positions_history[1:], self.joint_angles))
 
@@ -566,7 +620,6 @@ class GridWorldEnv(Node):  # Inherit from Node
         # Update self.u_prev to store the history
         self.u_prev = np.vstack((self.u_prev[1:], u_t))
 
-        print(self.u_prev.shape)
         # Thruster delta reward
         thruster_delta_reward = np.linalg.norm(u_t - self.u_prev[-2])
 
@@ -814,26 +867,25 @@ def save_model(agent, filename_prefix='dqn_model'):
 #     print(f"Average Evaluation Score over {num_episodes} episodes: {avg_score:.2f}")
 
 
-
 if __name__ == '__main__':
-    rclpy.init(args=None)  # Initialize the ROS 2 system
+    rclpy.init(args=None)  # Initialize ROS 2
     
-    # Create an environment instance with the configuration
-    env = GridWorldEnv(config)
+    env = GridWorldEnv(config)  # Create the environment
     
-    # Get the state and action size from the environment
+    # Get state and action size
     state_size = env.state_size
     action_size = env.action_size
     
     # Initialize the agent
     agent = Agent(state_size, action_size, config)
-    
-    # Train the agent
-    continuous_learning(env, agent, config)
 
-    # Keep the ROS 2 event loop running while training
-    rclpy.spin(env)  # Spin the ROS 2 node to handle communication and events
+    # Start continuous training in a separate thread
+    training_thread = threading.Thread(target=continuous_learning, args=(env, agent, config), daemon=True)
+    training_thread.start()
 
-    # Clean up and shut down the node after training is complete
-    env.destroy_node()  # Destroy the node properly
-    rclpy.shutdown()    # Shutdown the ROS 2 system
+    # Keep ROS spinning to handle callbacks
+    rclpy.spin(env)
+
+    # Once spin is done (e.g., shutdown), cleanup
+    env.destroy_node()  
+    rclpy.shutdown()

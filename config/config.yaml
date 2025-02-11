@@ -6,9 +6,9 @@ qnetwork:
 
 agent:
   buffer_size: 50000  # Maximum size of the replay buffer
-  batch_size: 32      # Number of experiences sampled from replay buffer for training
-  gamma: 0.95         # Discount factor for future rewards
-  learning_rate: 0.00001  # Learning rate for the optimizer
+  batch_size: 64      # Number of experiences sampled from replay buffer for training
+  gamma: 0.96         # Discount factor for future rewards
+  learning_rate: 0.000001  # Learning rate for the optimizer
   tau: 0.05           # Soft update factor for target network
   epsilon_initial: 1.0  # Initial exploration rate for epsilon-greedy policy
   epsilon_decay: 0.998   # Rate at which epsilon decays per episode

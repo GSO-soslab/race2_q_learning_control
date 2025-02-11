@@ -18,7 +18,7 @@ class CustomSetPointPublisher(Node):
         self.child_frame_id = "race2_auv/base_link"
         # Reset values
         self.reset_position = Vector3(x=0.0, y=0.0, z=0.0)
-        self.reset_orientation = Vector3(x=0.0, y=0.0, z=0.0)
+        self.reset_orientation = Vector3(x=3.14, y=0.0, z=0.0)
         self.reset_velocity = Vector3(x=0.0, y=0.0, z=0.0)
         self.reset_angular_rate = Vector3(x=0.0, y=0.0, z=0.0)
 
