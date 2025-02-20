@@ -19,7 +19,7 @@ class CustomSetPointPublisher(Node):
         )
         
         # Declare parameters with default values
-        self.declare_parameter('random_duration', 120)
+        self.declare_parameter('random_duration', 150)
         self.declare_parameter('rate_hz', 10.0)
         
         # Parameters
@@ -35,7 +35,7 @@ class CustomSetPointPublisher(Node):
         self.stable_angular_rate = Vector3(x=0.0, y=0.0, z=0.0)
         
         # Random ranges for fields we want to vary
-        self.pos_z_min, self.pos_z_max = 4.0, 5.5
+        self.pos_z_min, self.pos_z_max = 2.0, 5.5
         self.ori_z_min, self.ori_z_max = -1.5, 1.5
         self.vel_x_min, self.vel_x_max = -0.28, 0.28
 

@@ -416,6 +416,7 @@ class GridWorldEnv(Node):  # Inherit from Node
         self.orientation_state = raw_orientation_state
         self.v_state = raw_v_state
         self.omega_ref_state = raw_omega_ref_state
+        self.get_logger().info(f"Updated state - Position: {self.position_state}, Orientation: {self.orientation_state}")
 
     def update_current_setpoint(self, data):
 

@@ -5,10 +5,12 @@ import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.qos import QoSProfile, ReliabilityPolicy
-from std_msgs.msg import Int16MultiArray
+from std_msgs.msg import Int16MultiArray, Float64
 from std_srvs.srv import SetBool
+from mvp_msgs.msg import ControlProcess 
 from torch_dqn import GridWorldEnv
 from torch_dqn import QNetwork
+import numpy as np
 
 # Load configuration from config.yaml
 config_path = os.path.join(os.path.dirname(__file__), '../config/config.yaml')
@@ -50,11 +52,31 @@ class InferenceNode(Node):
         self.current_state = None
         self.done = False
         
+                # Initialize state variables
+        self.position_err = np.zeros(3)
+        self.v_err = np.zeros(3)
+        self.orientation_err = np.zeros(3)
+        self.omega_ref_err = np.zeros(3)
+        self.position_state = np.zeros(3)
+        self.v_state = np.zeros(3)
+        self.orientation_state = np.zeros(3)
+        self.omega_ref_state = np.zeros(3)
+        self.joint_angles_port = 0.0
+        self.joint_angles_starboard = 0.0
+        self.joint_angles = [0.0, 0.0]
+        self.thrust_heave_bow = 0.0
+        self.thrust_surge_port = 0.0
+        self.thrust_surge_starboard = 0.0
+        self.thrust_sway_stern = 0.0
+        self.action_mapping = {int(k): v for k, v in config['environment']['action_mapping'].items()}
+
+
+
         # Default thruster command when inference is disabled
         self.default_thruster_command = [1, 1]
         
         # Declare and get parameters
-        self.declare_parameter('model_path', 'dqn_model_2025-02-11_12-23-14.pth')
+        self.declare_parameter('model_path', 'dqn_model_2025-02-20_17-30-24.pth')
         model_path = self.get_parameter('model_path').get_parameter_value().string_value
 
         # Create QoS profile for better reliability
@@ -72,6 +94,54 @@ class InferenceNode(Node):
             self.get_logger()
         )
         
+                # Create all subscribers
+        self.create_subscription(
+            ControlProcess, 
+            '/race2_auv/controller/process/error', 
+            self.update_current_error, 
+            10)
+        
+        self.create_subscription(
+            ControlProcess, 
+            '/race2_auv/controller/process/state', 
+            self.update_current_state, 
+            10)
+            
+        self.create_subscription(
+            Float64, 
+            '/race2_auv/control/surge_port_servo', 
+            self.update_joint_port, 
+            10)
+        
+        self.create_subscription(
+            Float64, 
+            '/race2_auv/control/surge_starboard_servo', 
+            self.update_joint_starboard, 
+            10)
+                             
+        self.create_subscription(
+            Float64, 
+            '/race2_auv/control/thruster/heave_bow', 
+            self.update_thrust_heave_bow, 
+            10)
+        
+        self.create_subscription(
+            Float64, 
+            '/race2_auv/control/thruster/surge_port', 
+            self.update_thrust_surge_port, 
+            10)
+        
+        self.create_subscription(
+            Float64, 
+            '/race2_auv/control/thruster/surge_starboard', 
+            self.update_thrust_surge_starboard, 
+            10)
+        
+        self.create_subscription(
+            Float64, 
+            '/race2_auv/control/thruster/sway_stern', 
+            self.update_thrust_sway_stern, 
+            10)
         # Create publisher for thruster action
         self.thruster_action_pub = self.create_publisher(
             Int16MultiArray,
@@ -96,7 +166,7 @@ class InferenceNode(Node):
 
         # Create timer for main loop with callback group
         self.timer = self.create_timer(
-            0.2,  # 5Hz rate
+            0.01,  # 5Hz rate
             self.inference_loop,
             callback_group=self.callback_group
         )
@@ -104,6 +174,55 @@ class InferenceNode(Node):
         self.episode = 0
         self.total_reward = 0
         self.get_logger().info('Inference node initialized with inference disabled')
+
+    def update_current_error(self, data):
+        self.position_err = np.array([data.position.x, data.position.y, data.position.z])
+        self.orientation_err = np.array([data.orientation.x, data.orientation.y, data.orientation.z])
+        self.v_err = np.array([data.velocity.x, data.velocity.y, data.velocity.z])
+        self.omega_ref_err = np.array([data.angular_rate.x, data.angular_rate.y, data.angular_rate.z])
+        
+    def update_current_state(self, data):
+        self.position_state = np.array([data.position.x, data.position.y, data.position.z])
+        self.orientation_state = np.array([data.orientation.x, data.orientation.y, data.orientation.z])
+        self.v_state = np.array([data.velocity.x, data.velocity.y, data.velocity.z])
+        self.omega_ref_state = np.array([data.angular_rate.x, data.angular_rate.y, data.angular_rate.z])
+
+    def update_joint_port(self, data):
+        self.joint_angles_port = data.data
+        self.joint_angles[0] = data.data
+
+    def update_joint_starboard(self, data):
+        self.joint_angles_starboard = data.data
+        self.joint_angles[1] = data.data
+
+    def update_thrust_heave_bow(self, data):
+        self.thrust_heave_bow = data.data
+
+    def update_thrust_surge_port(self, data):
+        self.thrust_surge_port = data.data
+
+    def update_thrust_surge_starboard(self, data):
+        self.thrust_surge_starboard = data.data
+
+    def update_thrust_sway_stern(self, data):
+        self.thrust_sway_stern = data.data
+
+    def get_current_state(self):
+        """Returns the current state vector."""
+        return np.concatenate([
+            self.position_err[2:3],  # Depth
+            self.v_err[:2],          # Surge and sway
+            self.orientation_err[:3], # roll, pitch, yaw
+            self.position_state[2:3],
+            self.v_state[:2],
+            self.orientation_state[:3],
+            self.omega_ref_state[2:3],
+            self.joint_angles,
+            np.array([self.thrust_heave_bow,
+                     self.thrust_surge_port,
+                     self.thrust_surge_starboard,
+                     self.thrust_sway_stern])
+        ])
 
     def publish_default_thruster_command(self):
         """Publish the default thruster command."""
@@ -155,30 +274,60 @@ class InferenceNode(Node):
             self.get_logger().error(f"Service call failed: {e}")
             return False
 
+    # def inference_loop(self):
+    #     """Main inference loop."""
+    #     if not self.inference_enabled:
+    #         # Publish default thruster command
+    #         self.publish_default_thruster_command()
+    #         return
+
+    #     if self.current_state is not None and not self.done:
+    #         # Get action from the policy
+    #         self.current_state = self.get_current_state()
+    #         # print("Current State:", self.current_state)
+    #         action_index = self.agent.act(self.current_state)
+    #         print("Action Index", action_index)
+    #         # Take the action in the environment
+    #         next_state, reward, done, _ = self.env.step(action_index)
+    #         # print(next_state)
+    #         self.current_state = next_state
+    #         self.total_reward += reward
+    #         # print(self.total_reward)
+    #         self.done = done
+
+    #         if self.done:
+    #             self.get_logger().info(f"Episode {self.episode} completed with total reward: {self.total_reward}")
+    #             if self.inference_enabled:  # Only start new episode if still enabled
+    #                 self.episode += 1
+    #                 self.current_state = self.env.reset()
+    #                 self.done = False
+    #                 self.total_reward = 0
+    #                 self.get_logger().info(f"Starting Episode {self.episode}")
+
     def inference_loop(self):
-        """Main inference loop."""
         if not self.inference_enabled:
-            # Publish default thruster command
             self.publish_default_thruster_command()
             return
 
-        if self.current_state is not None and not self.done:
-            # Get action from the policy
-            action_index = self.agent.act(self.current_state)
-            # Take the action in the environment
-            next_state, reward, done, _ = self.env.step(action_index)
-            self.current_state = next_state
-            self.total_reward += reward
-            self.done = done
+        # Get current state
+        current_state = self.get_current_state()
+        
+        # Add some logging to debug
+        # self.get_logger().info(f"Current state: {current_state}")
+        
+        # Get action from the policy
+        action_index = self.agent.act(current_state)
+        
+        # Create and publish thruster command
+        action = self.action_mapping[action_index]
+        action1, action2 = action  # Unpack the action values
+        self.thruster_action = action
+        # Create the array: [action1, action2]
+        thruster_command = Int16MultiArray(data=[action1, action2])
+        print("Thruster1: {} , Thruster2: {}".format(action1, action2))
+        # Publish the action array
+        self.thruster_action_pub.publish(thruster_command)
 
-            if self.done:
-                self.get_logger().info(f"Episode {self.episode} completed with total reward: {self.total_reward}")
-                if self.inference_enabled:  # Only start new episode if still enabled
-                    self.episode += 1
-                    self.current_state = self.env.reset()
-                    self.done = False
-                    self.total_reward = 0
-                    self.get_logger().info(f"Starting Episode {self.episode}")
 
 
 def main(args=None):

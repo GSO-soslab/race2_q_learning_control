@@ -1,102 +1,170 @@
-import rclpy,time
+import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Header
 from geometry_msgs.msg import Vector3
-from mvp_msgs.msg import ControlProcess  # Custom message type
+from mvp_msgs.msg import ControlProcess
+from dataclasses import dataclass
+from typing import List
+import time
+
+@dataclass
+class SetPoint:
+    """Data class to store setpoint configuration"""
+    position: Vector3
+    orientation: Vector3
+    velocity: Vector3
+    angular_rate: Vector3
+    duration: int
+    description: str
 
 class CustomSetPointPublisher(Node):
-
     def __init__(self):
         super().__init__('custom_set_point_publisher')
+        
+        # Define publisher
+        self.set_point_pub = self.create_publisher(
+            ControlProcess, 
+            '/race2_auv/controller/process/set_point', 
+            10
+        )
 
-        # Define publisher for the custom topic
-        self.set_point_pub = self.create_publisher(ControlProcess, '/race2_auv/controller/process/set_point', 10)
+        # Configuration
+        self.config = {
+            'frame_id': "race2_auv/world_ned",
+            'control_mode': "4dof",
+            'child_frame_id': "race2_auv/cg_link"
+        }
 
-        # Parameters
-        self.frame_id_value = "race2_auv/world_ned"
-        self.control_mode_value = "4dof"
-        self.child_frame_id = "race2_auv/cg_link"
-        # Reset values
-        self.reset_position = Vector3(x=0.0, y=0.0, z=0.0)
-        self.reset_orientation = Vector3(x=3.14, y=0.0, z=0.0)
-        self.reset_velocity = Vector3(x=0.0, y=0.0, z=0.0)
-        self.reset_angular_rate = Vector3(x=0.0, y=0.0, z=0.0)
+        # Get parameters with defaults
+        self.params = {
+            'reset1_duration': self.declare_parameter("reset1_duration", 2).value,
+            'set_point_duration': self.declare_parameter("set_point_duration", 300).value,
+            'reset2_duration': self.declare_parameter("reset2_duration", 2).value,
+            'rate_hz': self.declare_parameter("rate_hz", 5).value
+        }
 
-        # Timing parameters (retrieved from parameters)
-        self.reset1_duration = self.declare_parameter("reset1_duration", 2).get_parameter_value().integer_value
-        self.set_point_duration = self.declare_parameter("set_point_duration", 300).get_parameter_value().integer_value
-        self.reset2_duration = self.declare_parameter("reset2_duration", 2).get_parameter_value().integer_value
-        self.rate_hz = self.declare_parameter("rate_hz", 5).get_parameter_value().integer_value
+        # Define mission setpoints
+        self.reset_point = SetPoint(
+            position=Vector3(x=0.0, y=0.0, z=0.0),
+            orientation=Vector3(x=3.14, y=0.0, z=0.0),
+            velocity=Vector3(x=0.0, y=0.0, z=0.0),
+            angular_rate=Vector3(x=0.0, y=0.0, z=0.0),
+            duration=0,  # Duration set during execution
+            description="Reset Position"
+        )
 
-        self.rate = self.create_rate(self.rate_hz)
+        self.mission_sequence = self._create_mission_sequence()
 
-    def publish_values(self, position, orientation, velocity, angular_rate, duration):
-        """Helper function to publish specified values for a given duration."""
+    def _create_mission_sequence(self) -> List[SetPoint]:
+        """Create the sequence of setpoints for the mission"""
+        return [
+            SetPoint(
+                position=Vector3(x=0.0, y=0.0, z=5.0),
+                orientation=Vector3(x=3.14, y=0.0, z=0.0),
+                velocity=Vector3(x=0.25, y=0.0, z=0.0),
+                angular_rate=Vector3(x=0.0, y=0.0, z=0.0),
+                duration=50,
+                description="Initial ascent and forward movement"
+            ),
+            SetPoint(
+                position=Vector3(x=0.0, y=0.0, z=3.0),
+                orientation=Vector3(x=3.14, y=0.0, z=1.57),
+                velocity=Vector3(x=0.25, y=0.0, z=0.0),
+                angular_rate=Vector3(x=0.0, y=0.0, z=0.0),
+                duration=50,
+                description="Descend and turn 90 degrees right"
+            ),
+            SetPoint(
+                position=Vector3(x=0.0, y=0.0, z=3.0),
+                orientation=Vector3(x=3.14, y=0.0, z=3.14),
+                velocity=Vector3(x=0.25, y=0.0, z=0.0),
+                angular_rate=Vector3(x=0.0, y=0.0, z=0.0),
+                duration=50,
+                description="Turn to 180 degrees"
+            ),
+            SetPoint(
+                position=Vector3(x=0.0, y=0.0, z=3.0),
+                orientation=Vector3(x=3.14, y=0.0, z=3.14),
+                velocity=Vector3(x=-0.25, y=0.0, z=0.0),
+                angular_rate=Vector3(x=0.0, y=0.0, z=0.0),
+                duration=50,
+                description="Reverse direction"
+            ),
+            SetPoint(
+                position=Vector3(x=0.0, y=0.0, z=3.0),
+                orientation=Vector3(x=3.14, y=0.0, z=3.14),
+                velocity=Vector3(x=0.25, y=0.0, z=0.0),
+                angular_rate=Vector3(x=0.0, y=0.0, z=0.0),
+                duration=100,
+                description="Forward movement at 180 degrees"
+            ),
+            SetPoint(
+                position=Vector3(x=0.0, y=0.0, z=5.0),
+                orientation=Vector3(x=3.14, y=0.0, z=-1.57),
+                velocity=Vector3(x=0.25, y=0.0, z=0.0),
+                angular_rate=Vector3(x=0.0, y=0.0, z=0.0),
+                duration=50,
+                description="Ascend and turn 90 degrees left"
+            ),
+            SetPoint(
+                position=Vector3(x=0.0, y=0.0, z=5.0),
+                orientation=Vector3(x=3.14, y=0.0, z=0.0),
+                velocity=Vector3(x=0.25, y=0.0, z=0.0),
+                angular_rate=Vector3(x=0.0, y=0.0, z=0.0),
+                duration=50,
+                description="Return to initial orientation"
+            )
+        ]
+
+    def _create_control_message(self, setpoint: SetPoint) -> ControlProcess:
+        """Create a control message from a setpoint"""
+        msg = ControlProcess()
+        msg.header = Header()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = self.config['frame_id']
+        msg.child_frame_id = self.config['child_frame_id']
+        msg.control_mode = self.config['control_mode']
+        
+        msg.position = setpoint.position
+        msg.orientation = setpoint.orientation
+        msg.velocity = setpoint.velocity
+        msg.angular_rate = setpoint.angular_rate
+        
+        return msg
+
+    def publish_setpoint(self, setpoint: SetPoint):
+        """Publish a setpoint for the specified duration"""
+        self.get_logger().info(f"Publishing {setpoint.description} for {setpoint.duration} seconds")
+        
         start_time = self.get_clock().now().seconds_nanoseconds()[0]
-        end_time = start_time + duration
+        end_time = start_time + setpoint.duration
         
         while self.get_clock().now().seconds_nanoseconds()[0] < end_time:
-            msg = ControlProcess()
-            msg.header = Header()
-            msg.header.stamp = self.get_clock().now().to_msg()
-            msg.header.frame_id = self.frame_id_value
-            msg.child_frame_id = self.child_frame_id
-
-            msg.control_mode = self.control_mode_value
-            msg.position = position
-            msg.orientation = orientation
-            msg.velocity = velocity
-            msg.angular_rate = angular_rate
-
-            # Publish the message
+            msg = self._create_control_message(setpoint)
             self.set_point_pub.publish(msg)
-            # self.get_logger().info(f"Published message at {msg.header.stamp}")
-            # rclpy.spin_once(self) 
-            time.sleep(1.0 / self.rate_hz)  # Sleep to maintain the desired frequency
+            time.sleep(1.0 / self.params['rate_hz'])
 
-            
     def run(self):
-        # Episode 1: Publish reset values
-        self.get_logger().info(f"Publishing reset values for {self.reset1_duration} seconds")
-        self.publish_values(self.reset_position, self.reset_orientation, self.reset_velocity, self.reset_angular_rate, self.reset1_duration)
+        """Execute the complete mission sequence"""
+        # Initial reset
+        self.reset_point.duration = self.params['reset1_duration']
+        self.publish_setpoint(self.reset_point)
 
-        # Episode 2: Publish desired set points in sequence
-        self.get_logger().info("Publishing setpoint 1 for 50 seconds")
-        self.publish_values(Vector3(x=0.0, y=0.0, z=5.0), Vector3(x=3.14, y=0.0, z=0.0), Vector3(x=0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 50)
+        # Execute mission sequence
+        for setpoint in self.mission_sequence:
+            self.publish_setpoint(setpoint)
 
-        self.get_logger().info("Publishing setpoint 2 for 50 seconds")
-        self.publish_values(Vector3(x=0.0, y=0.0, z=3.0), Vector3(x=3.14, y=0.0, z=1.57), Vector3(x=0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 50)
-
-        self.get_logger().info("Publishing setpoint 3 for 50 seconds")
-        self.publish_values(Vector3(x=0.0, y=0.0, z=3.0), Vector3(x=3.14, y=0.0, z=3.14), Vector3(x=0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 50)
-
-        self.get_logger().info("Publishing setpoint 3/1 for 50 seconds")
-        self.publish_values(Vector3(x=0.0, y=0.0, z=3.0), Vector3(x=3.14, y=0.0, z=3.14), Vector3(x=-0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 50)
-
-        self.get_logger().info("Publishing setpoint 3/2 for 100 seconds")
-        self.publish_values(Vector3(x=0.0, y=0.0, z=3.0), Vector3(x=3.14, y=0.0, z=3.14), Vector3(x=0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 100)
-
-        self.get_logger().info("Publishing setpoint 4 for 50 seconds")
-        self.publish_values(Vector3(x=0.0, y=0.0, z=5.0), Vector3(x=3.14, y=0.0, z=-1.57), Vector3(x=0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 50)
-
-        self.get_logger().info("Publishing setpoint 5 for 50 seconds")
-        self.publish_values(Vector3(x=0.0, y=0.0, z=5.0), Vector3(x=3.14, y=0.0, z=0.0), Vector3(x=0.25, y=0.0, z=0.0), Vector3(x=0.0, y=0.0, z=0.0), 50)
-
-        # Episode 3: Publish reset values again
-        self.get_logger().info(f"Publishing reset values for {self.reset2_duration} seconds")
-        self.publish_values(self.reset_position, self.reset_orientation, self.reset_velocity, self.reset_angular_rate, self.reset2_duration)
-
-        self.get_logger().info("All episodes completed. Node will now stop.")
-
+        # Final reset
+        self.reset_point.duration = self.params['reset2_duration']
+        self.publish_setpoint(self.reset_point)
+        
+        self.get_logger().info("Mission completed")
 
 def main(args=None):
     rclpy.init(args=args)
-
     publisher = CustomSetPointPublisher()
     publisher.run()
-
     rclpy.shutdown()
-
 
 if __name__ == '__main__':
     main()
