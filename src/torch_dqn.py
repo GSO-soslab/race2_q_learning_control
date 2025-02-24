@@ -508,8 +508,8 @@ class GridWorldEnv(Node):  # Inherit from Node
         elapsed_time_total = current_time - self.start_time.seconds_nanoseconds()[0]
 
         # Determine if the episode has ended
-        done = elapsed_time_total > self.max_episode_duration
-        # done = True  # Assume episode ends after one action
+        # done = elapsed_time_total > self.max_episode_duration
+        done = True  # Assume episode ends after one action
         if done:
             self._episode_ended = True
 
@@ -652,12 +652,13 @@ class GridWorldEnv(Node):  # Inherit from Node
             w7 * thruster_action_penalty
         )
         
-        # print(f"Performance Error Contribution: {-w1 * performance_error}")
-        # print(f"Servo Smoothness Penalty Contribution: {-w2 * servo_smoothness_penalty}")
+        print(f"Performance Error Contribution: {-w1 * performance_error}")
+        print(f"Servo Smoothness Penalty Contribution: {-w2 * servo_smoothness_penalty}")
         # print(f"Thruster Usage Penalty Contribution: {-w3 * thruster_usage_penalty}")
-        # print(f"Thruster Smoothness Penalty Contribution: {-w4 * thruster_smoothness_penalty}")
+        print(f"Thruster Smoothness Penalty Contribution: {-w4 * thruster_smoothness_penalty}")
         # print(f"Servo Angle Penalty Contribution: {-w5 * servo_angle_penalty}")
         # print(f"Thruster Delta Reward Contribution: {-w6 * thruster_delta_reward}")
+        print(f"Thruster action penalty: {w7 * thruster_action_penalty}")
 
         return reward
 
@@ -681,7 +682,8 @@ def continuous_learning(env, agent, config):
     q_value_history = []
     loss_history = []
     episodes = []
-
+    episode_durations = []
+    
     # Set up the plots
     ax[0].set_title('Total Reward per Episode')
     ax[0].set_xlabel('Episode')
@@ -689,10 +691,16 @@ def continuous_learning(env, agent, config):
     reward_line, = ax[0].plot([], [], label='Reward')
     ax[0].legend()
 
-    ax[1].set_title('Max Q-value per Episode')
+    # ax[1].set_title('Max Q-value per Episode')
+    # ax[1].set_xlabel('Episode')
+    # ax[1].set_ylabel('Max Q-value')
+    # q_value_line, = ax[1].plot([], [], label='Max Q-value', color='orange')
+    # ax[1].legend()
+
+    ax[1].set_title('No of Episodes vs Duration of Episodes')
     ax[1].set_xlabel('Episode')
-    ax[1].set_ylabel('Max Q-value')
-    q_value_line, = ax[1].plot([], [], label='Max Q-value', color='orange')
+    ax[1].set_ylabel('No of Episodes')
+    episode_line, = ax[1].plot([], [], label='Len of Episodes', color='orange')
     ax[1].legend()
 
     ax[2].set_title('Average Loss per Episode')
@@ -702,6 +710,7 @@ def continuous_learning(env, agent, config):
     ax[2].legend()
 
     # Training Loop
+    #Episodes
     while episode_count < max_episodes and rclpy.ok():
         if env.stop_training:
             print("Service called: Saving policy and stopping training.")
@@ -718,12 +727,16 @@ def continuous_learning(env, agent, config):
         max_q_value = float('-inf')
         episode_loss = 0.0
         loss_steps = 0
+        episode_duration_count = 0
 
+        #steps per episode
         for episode_t in range(max_t):
             # 1. Select an action according to current policy (with exploration)
             action_index = agent.act(state, epsilon)
-
+            print(action_index)
             # 2. Execute the action in the environment
+
+            #This is when "done" is taken from env.step
             next_state, reward, done, _ = env.step(action_index)
 
             # 3. Store transition and (optionally) do a batch update
@@ -741,7 +754,8 @@ def continuous_learning(env, agent, config):
 
             total_reward += reward
             step_count += 1
-            
+            episode_duration_count = step_count + 1
+            #step avg reward
             average_reward = total_reward / step_count if step_count > 0 else 0.0
 
             # 6. Log the max Q-value for debugging/analysis
@@ -751,7 +765,7 @@ def continuous_learning(env, agent, config):
                 q_values = agent.qnetwork(state_tensor)
             current_max_q = q_values.max().item()
             max_q_value = max(max_q_value, current_max_q)
-
+            done = average_reward < -1.0 or max_q_value <= -3.0
             # 7. Track loss if a batch update occurred in agent.step(...)
             if loss is not None:
                 episode_loss += loss
@@ -759,6 +773,7 @@ def continuous_learning(env, agent, config):
 
             if done:
                 break
+
 
             # rate.sleep()
 
@@ -772,13 +787,17 @@ def continuous_learning(env, agent, config):
         episodes.append(episode_count)
         # reward_history.append(score)
         reward_history.append(average_reward)
-        q_value_history.append(max_q_value)
+        # q_value_history.append(max_q_value)
+        episode_durations.append(episode_duration_count)
+
         loss_history.append(average_loss)
 
         # 11. Update the plots
-        update_plots(ax, episodes, reward_history, q_value_history, loss_history,
-                     reward_line, q_value_line, loss_line)
-
+        # update_plots(ax, episodes, reward_history, q_value_history, loss_history,
+        #              reward_line, q_value_line, loss_line)
+        update_plots(ax, episodes, reward_history, episode_durations, loss_history,
+                        reward_line, episode_line, loss_line)
+            
         # 12. Print status for monitoring
         print(f"Episode {episode_count}: Score: {score:.2f}, Max Q-value: {max_q_value:.2f}, "
               f"Average Loss: {average_loss:.4f}, Epsilon: {epsilon:.3f}")
@@ -816,8 +835,10 @@ def continuous_learning(env, agent, config):
         print(f"Episode completed with total reward: {total_reward}")
 
 
-def update_plots(ax, episodes, reward_history, q_value_history, loss_history,
-                 reward_line, q_value_line, loss_line):
+# def update_plots(ax, episodes, reward_history, q_value_history, loss_history,
+#                  reward_line, q_value_line, loss_line):
+def update_plots(ax, episodes, reward_history, episode_durations, loss_history,
+                 reward_line, episode_line, loss_line):
     # Update reward plot
     reward_line.set_xdata(episodes)
     reward_line.set_ydata(reward_history)
@@ -825,8 +846,13 @@ def update_plots(ax, episodes, reward_history, q_value_history, loss_history,
     ax[0].autoscale_view()
 
     # Update Q-value plot
-    q_value_line.set_xdata(episodes)
-    q_value_line.set_ydata(q_value_history)
+    # q_value_line.set_xdata(episodes)
+    # q_value_line.set_ydata(q_value_history)
+    # ax[1].relim()
+    # ax[1].autoscale_view()
+
+    episode_line.set_xdata(episodes)
+    episode_line.set_ydata(episode_durations)
     ax[1].relim()
     ax[1].autoscale_view()
 

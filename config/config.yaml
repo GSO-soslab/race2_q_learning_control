@@ -2,17 +2,17 @@
 
 qnetwork:
   # hidden_layers: [600, 400, 100]  # Hidden layers for Q-network
-  hidden_layers: [400, 400, 400]  # Hidden layers for Q-network
+  hidden_layers: [128, 128, 128]  # Hidden layers for Q-network
 
 agent:
   buffer_size: 10000  # Maximum size of the replay buffer
-  batch_size: 64      # Number of experiences sampled from replay buffer for training
+  batch_size: 128      # Number of experiences sampled from replay buffer for training
   gamma: 0.96         # Discount factor for future rewards
-  learning_rate: 0.000001  # Learning rate for the optimizer
+  learning_rate: 0.001  # Learning rate for the optimizer
   tau: 0.05           # Soft update factor for target network
   epsilon_initial: 1.0  # Initial exploration rate for epsilon-greedy policy
-  epsilon_decay: 0.998   # Rate at which epsilon decays per episode
-  epsilon_min: 0.1     # Minimum value for epsilon
+  epsilon_decay: 0.994   # Rate at which epsilon decays per episode
+  epsilon_min: 0.01     # Minimum value for epsilon
 
 environment:
   error_size: 6       # Size of the error vector
@@ -21,7 +21,7 @@ environment:
   thruster_size: 4     # Number of thrusters was 4
   action_size: 4       # Number of discrete actions available
   max_episode_duration: 10.0  # Maximum duration (seconds) for each episode
-  sampling_time: 0.2  # Sampling time (seconds) between actions was 0.208
+  sampling_time: 0.25  # Sampling time (seconds) between actions was 0.208
   # action_interval: 2.0  # Interval (seconds) between consecutive actions
   thruster_history_length: 20  # Number of thruster actions stored for smoothness penalty
   servo_history_length: 20     # Number of servo states stored for smoothness penalty
@@ -74,7 +74,7 @@ reward_function:
 
 training:
   max_episodes: 1000    # Maximum episodes for training
-  max_t: 3          # Maximum steps per episode
+  max_t: 40        # Maximum steps per episode
   target_avg_reward: 20  # Target average reward for early stopping
   plot_interval: 2    # Interval for updating plots during training
   random_seed: 42      # Random seed for reproducibility

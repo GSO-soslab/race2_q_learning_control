@@ -76,7 +76,7 @@ class InferenceNode(Node):
         self.default_thruster_command = [1, 1]
         
         # Declare and get parameters
-        self.declare_parameter('model_path', 'dqn_model_2025-02-20_17-30-24.pth')
+        self.declare_parameter('model_path', 'dqn_model_2025-02-24_16-50-32.pth')
         model_path = self.get_parameter('model_path').get_parameter_value().string_value
 
         # Create QoS profile for better reliability

@@ -19,8 +19,8 @@ class CustomSetPointPublisher(Node):
         )
         
         # Declare parameters with default values
-        self.declare_parameter('random_duration', 150)
-        self.declare_parameter('rate_hz', 10.0)
+        self.declare_parameter('random_duration', 80)
+        self.declare_parameter('rate_hz', 2.0)
         
         # Parameters
         self.frame_id_value = "race2_auv/world_ned"
@@ -39,6 +39,10 @@ class CustomSetPointPublisher(Node):
         self.ori_z_min, self.ori_z_max = -1.5, 1.5
         self.vel_x_min, self.vel_x_max = -0.28, 0.28
 
+    def biased_random(prev_value, min_val, max_val, bias_factor=0.5):
+        new_value = random.uniform(min_val, max_val)
+        return new_value + bias_factor * (new_value - prev_value)
+    
     def publish_values(self, position, orientation, velocity, angular_rate, duration):
         """Helper function to publish specified values for a given duration."""
         start_time = self.get_clock().now().seconds_nanoseconds()[0]
@@ -94,6 +98,21 @@ class CustomSetPointPublisher(Node):
                 current_position.z = random.uniform(self.pos_z_min, self.pos_z_max)
                 current_velocity.x = random.uniform(self.vel_x_min, self.vel_x_max)
             
+
+            # # Randomize fields based on current period
+            # if period_index == 0:
+            #     # Vary position.z and orientation.z
+            #     current_position.z = self.biased_random(self.pos_z_min, self.pos_z_max)
+            #     current_orientation.z = self.biased_random(self.ori_z_min, self.ori_z_max)
+            # elif period_index == 1:
+            #     # Vary orientation.z and velocity.x
+            #     current_orientation.z = self.biased_random(self.ori_z_min, self.ori_z_max)  # Corrected here
+            #     current_velocity.x = self.biased_random(self.vel_x_min, self.vel_x_max)
+            # else:  # period_index == 2
+            #     # Vary position.z and velocity.x
+            #     current_position.z = self.biased_random(self.pos_z_min, self.pos_z_max)
+            #     current_velocity.x = self.biased_random(self.vel_x_min, self.vel_x_max)
+
             # Publish these values for the duration
             self.publish_values(
                 current_position,
