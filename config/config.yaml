@@ -49,7 +49,7 @@ reward_function:
   w1: 1.0              # Weight for performance error
   w2: 0.2             # Weight for servo smoothness penalty
   w3: 0.0              # Weight for thruster usage penalty (keep zero)
-  w4: 0.3              # Weight for thruster smoothness penalty
+  w4: 1.0              # Weight for thruster smoothness penalty
   w5: 0.0              # Weight for servo angle penalty (keep zero)
   w6: 0.0              # Weight for thruster delta reward
   w7: 0.5              # Weight for action delta reward
@@ -74,7 +74,7 @@ reward_function:
 
 training:
   max_episodes: 1000    # Maximum episodes for training
-  max_t: 40        # Maximum steps per episode
+  max_t: 300        # Maximum steps per episode
   target_avg_reward: 20  # Target average reward for early stopping
   plot_interval: 2    # Interval for updating plots during training
   random_seed: 42      # Random seed for reproducibility
