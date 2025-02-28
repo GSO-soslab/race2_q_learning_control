@@ -63,7 +63,7 @@ class CustomSetPointPublisher(Node):
                 orientation=Vector3(x=3.14, y=0.0, z=0.0),
                 velocity=Vector3(x=0.25, y=0.0, z=0.0),
                 angular_rate=Vector3(x=0.0, y=0.0, z=0.0),
-                duration=50,
+                duration=100,
                 description="Initial ascent and forward movement"
             ),
             SetPoint(
@@ -71,7 +71,7 @@ class CustomSetPointPublisher(Node):
                 orientation=Vector3(x=3.14, y=0.0, z=1.57),
                 velocity=Vector3(x=0.25, y=0.0, z=0.0),
                 angular_rate=Vector3(x=0.0, y=0.0, z=0.0),
-                duration=50,
+                duration=100,
                 description="Descend and turn 90 degrees right"
             ),
             SetPoint(
@@ -79,7 +79,7 @@ class CustomSetPointPublisher(Node):
                 orientation=Vector3(x=3.14, y=0.0, z=3.14),
                 velocity=Vector3(x=0.25, y=0.0, z=0.0),
                 angular_rate=Vector3(x=0.0, y=0.0, z=0.0),
-                duration=50,
+                duration=100,
                 description="Turn to 180 degrees"
             ),
             SetPoint(
@@ -87,7 +87,7 @@ class CustomSetPointPublisher(Node):
                 orientation=Vector3(x=3.14, y=0.0, z=3.14),
                 velocity=Vector3(x=-0.25, y=0.0, z=0.0),
                 angular_rate=Vector3(x=0.0, y=0.0, z=0.0),
-                duration=50,
+                duration=100,
                 description="Reverse direction"
             ),
             SetPoint(
@@ -95,7 +95,7 @@ class CustomSetPointPublisher(Node):
                 orientation=Vector3(x=3.14, y=0.0, z=3.14),
                 velocity=Vector3(x=0.25, y=0.0, z=0.0),
                 angular_rate=Vector3(x=0.0, y=0.0, z=0.0),
-                duration=100,
+                duration=150,
                 description="Forward movement at 180 degrees"
             ),
             SetPoint(
@@ -103,7 +103,7 @@ class CustomSetPointPublisher(Node):
                 orientation=Vector3(x=3.14, y=0.0, z=-1.57),
                 velocity=Vector3(x=0.25, y=0.0, z=0.0),
                 angular_rate=Vector3(x=0.0, y=0.0, z=0.0),
-                duration=50,
+                duration=100,
                 description="Ascend and turn 90 degrees left"
             ),
             SetPoint(
@@ -111,7 +111,7 @@ class CustomSetPointPublisher(Node):
                 orientation=Vector3(x=3.14, y=0.0, z=0.0),
                 velocity=Vector3(x=0.25, y=0.0, z=0.0),
                 angular_rate=Vector3(x=0.0, y=0.0, z=0.0),
-                duration=50,
+                duration=100,
                 description="Return to initial orientation"
             )
         ]

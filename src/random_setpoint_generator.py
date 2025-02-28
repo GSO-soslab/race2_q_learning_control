@@ -19,7 +19,7 @@ class CustomSetPointPublisher(Node):
         )
         
         # Declare parameters with default values
-        self.declare_parameter('random_duration', 80)
+        self.declare_parameter('random_duration', 20)
         self.declare_parameter('rate_hz', 2.0)
         
         # Parameters

@@ -566,7 +566,7 @@ class GridWorldEnv(Node):  # Inherit from Node
     def calculate_reward(self):
         # Reward function parameters
         w = self.config['reward_function']
-        w1, w2, w3, w4, w5, w6 ,w7 = w['w1'], w['w2'], w['w3'], w['w4'], w['w5'], w['w6'], w['w7']
+        w1, w2, w3, w4, w5, w6 ,w7, w8 = w['w1'], w['w2'], w['w3'], w['w4'], w['w5'], w['w6'], w['w7'],w['w8']
         state_error_weights = np.array(w['state_error_weights'])
 
         # Compute the error vector
@@ -630,16 +630,16 @@ class GridWorldEnv(Node):  # Inherit from Node
 
 
         # Update thruster_command_action_prev with clear logic
-        thruster_action_penalty = np.linalg.norm(self.thruster_action - np.average(self.thruster_command_action_prev, axis=0))
-
         self.thruster_command_action_prev = np.vstack((
             self.thruster_command_action_prev[1:],  # Keep all except the first
             self.thruster_action  # Add the newest action
         ))
-
-        
+        thruster_action_penalty = np.linalg.norm(self.thruster_action - np.average(self.thruster_command_action_prev, axis=0))
         # Debugging output (optional)
         # print("Thruster Action Penalty:", self.thruster_command_action_prev)
+
+        # Thruster Direction Change Penalty
+        direction_change_penalty = w8 * np.sum(thruster_action_penalty ** 2)  # Quadratic penalty
 
         # Total reward
         reward =   - (
@@ -649,7 +649,8 @@ class GridWorldEnv(Node):  # Inherit from Node
             w4 * thruster_smoothness_penalty +
             w5 * servo_angle_penalty +
             w6 * thruster_delta_reward +
-            w7 * thruster_action_penalty
+            w7 * thruster_action_penalty +
+            w8 * direction_change_penalty
         )
         
         # print(f"Performance Error Contribution: {-w1 * performance_error}")
@@ -764,8 +765,9 @@ def continuous_learning(env, agent, config):
                 q_values = agent.qnetwork(state_tensor)
             current_max_q = q_values.max().item()
             max_q_value = max(max_q_value, current_max_q)
-            done = reward < -0.5 or max_q_value <= -3.0
+            done = reward < -3.0 or max_q_value <= -3.0
             # 7. Track loss if a batch update occurred in agent.step(...)
+            
             if loss is not None:
                 episode_loss += loss
                 loss_steps += 1
@@ -774,15 +776,12 @@ def continuous_learning(env, agent, config):
                 break
 
         # After training is complete, publish the final selected action
-        print("Training complete. Publishing final action...")
+        print("Episode complete. Publishing final action...")
         best_action_index = agent.act(state, epsilon=0)  # Select best action greedily
         best_action = env.action_mapping[best_action_index]
         thruster_command = Int16MultiArray(data=[best_action[0], best_action[1]])
         env.thruster_action_pub.publish(thruster_command)
         print("Published final action:", best_action)
-
-
-            # rate.sleep()
 
         # 8. Decay epsilon after each episode
         epsilon = max(epsilon_min, epsilon_decay * epsilon)

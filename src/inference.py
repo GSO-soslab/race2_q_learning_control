@@ -166,7 +166,7 @@ class InferenceNode(Node):
 
         # Create timer for main loop with callback group
         self.timer = self.create_timer(
-            0.01,  # 5Hz rate
+            0.2,  # 5Hz rate
             self.inference_loop,
             callback_group=self.callback_group
         )
