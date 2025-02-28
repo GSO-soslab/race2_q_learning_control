@@ -36,7 +36,57 @@ random.seed(random_seed)
 np.random.seed(random_seed)
 torch.manual_seed(random_seed)
 
- 
+class DeltaBarDelta:
+    def __init__(self, parameters, initial_lr=0.1, increase_factor=0.05, decrease_factor=0.7, momentum=0.9):
+        self.parameters = list(parameters)
+        self.increase_factor = increase_factor  # κ: how much to increase learning rate
+        self.decrease_factor = decrease_factor  # φ: how much to decrease learning rate
+        self.momentum = momentum  # α: momentum factor
+        
+        # Initialize learning rates, previous gradients, and previous updates
+        self.learning_rates = [torch.ones_like(p) * initial_lr for p in self.parameters]
+        self.prev_grads = [torch.zeros_like(p) for p in self.parameters]
+        self.prev_updates = [torch.zeros_like(p) for p in self.parameters]
+        
+    def step(self):
+        with torch.no_grad():
+            for i, param in enumerate(self.parameters):
+                if param.grad is None:
+                    continue
+                
+                # Calculate current gradient and update
+                curr_grad = param.grad
+                
+                # Calculate the "bar" (smoothed gradient)
+                grad_bar = self.momentum * self.prev_grads[i] + (1 - self.momentum) * curr_grad
+                
+                # Update learning rates based on current and previous gradients
+                # Increase if same sign, decrease if opposite sign
+                sign_product = self.prev_grads[i] * curr_grad
+                lr_update = torch.where(
+                    sign_product > 0,
+                    self.increase_factor,  # Increase learning rate
+                    torch.where(
+                        sign_product < 0,
+                        -self.decrease_factor * self.learning_rates[i],  # Decrease learning rate
+                        0.0  # No change
+                    )
+                )
+                self.learning_rates[i] = torch.clamp(self.learning_rates[i] + lr_update, min=1e-6, max=1.0)
+                
+                # Apply the update with momentum
+                update = self.momentum * self.prev_updates[i] - self.learning_rates[i] * curr_grad
+                param.add_(update)
+                
+                # Store current gradients and updates for next iteration
+                self.prev_grads[i] = grad_bar.clone()
+                self.prev_updates[i] = update.clone()
+                
+    def zero_grad(self):
+        for param in self.parameters:
+            if param.grad is not None:
+                param.grad.zero_()
+
 class QNetwork(nn.Module):
     def __init__(self, state_size, action_size, hidden_layers):
         super(QNetwork, self).__init__()
@@ -98,9 +148,32 @@ class Agent:
         # self.qnetwork.apply(self.weights_init)
         # self.target_network.apply(self.weights_init)
 
-        # Initialize the optimizer for the Q-network
-        lr = config['agent']['learning_rate']
-        self.optimizer = optim.AdamW(self.qnetwork.parameters(), lr=lr)
+        # Check which optimizer to use
+        optimizer_type = config['agent']['optimizer']
+
+        if optimizer_type == 'delta_bar_delta':
+            # Initialize Delta-Bar-Delta optimizer with config parameters
+            print("using delta bar delta")
+            initial_lr = config['agent']['learning_rate']
+            increase_factor = config['agent'].get('dbd_increase_factor', 0.05)
+            decrease_factor = config['agent'].get('dbd_decrease_factor', 0.7)
+            momentum = config['agent'].get('dbd_momentum', 0.9)
+            
+            self.optimizer = DeltaBarDelta(
+                self.qnetwork.parameters(), 
+                initial_lr=initial_lr,
+                increase_factor=increase_factor,
+                decrease_factor=decrease_factor,
+                momentum=momentum
+            )
+        else:
+            # Default to AdamW if not specified
+            lr = config['agent']['learning_rate']
+            self.optimizer = optim.AdamW(self.qnetwork.parameters(), lr=lr)
+        
+        # # Initialize the optimizer for the Q-network
+        # lr = config['agent']['learning_rate']
+        # self.optimizer = optim.AdamW(self.qnetwork.parameters(), lr=lr)
 
         # Replay buffer
         buffer_size = config['agent']['buffer_size']
@@ -577,8 +650,11 @@ class GridWorldEnv(Node):  # Inherit from Node
              self.orientation_err[:3], # roll, pitch, yaw
             ]).astype(np.float32)
         # Compute performance error (quadratic penalty)
-        weighted_errors = state_error_weights * error
-        performance_error = np.sum(weighted_errors ** 2)
+        # weighted_errors =  * state_error_weights * error
+        # performance_error = np.sum(weighted_errors ** 2)
+        error_column = error.reshape(-1, 1)
+        performance_error = np.dot(error , np.diag(state_error_weights))
+        performance_error = np.dot(performance_error,error_column)
         performance_error = np.exp(-performance_error)
         # Servo smoothness penalty using sine and cosine components
         servo_smoothness_penalty = 0
@@ -634,12 +710,12 @@ class GridWorldEnv(Node):  # Inherit from Node
             self.thruster_command_action_prev[1:],  # Keep all except the first
             self.thruster_action  # Add the newest action
         ))
-        thruster_action_penalty = np.linalg.norm(self.thruster_action - np.average(self.thruster_command_action_prev, axis=0))
+        thruster_action_penalty = np.sum(self.thruster_action - np.average(self.thruster_command_action_prev, axis=0))
         # Debugging output (optional)
         # print("Thruster Action Penalty:", self.thruster_command_action_prev)
 
         # Thruster Direction Change Penalty
-        direction_change_penalty = w8 * np.sum(thruster_action_penalty ** 2)  # Quadratic penalty
+        direction_change_penalty = w8 * thruster_action_penalty ** 2  # Quadratic penalty
 
         # Total reward
         reward =   - (
@@ -660,7 +736,7 @@ class GridWorldEnv(Node):  # Inherit from Node
         # print(f"Servo Angle Penalty Contribution: {-w5 * servo_angle_penalty}")
         # print(f"Thruster Delta Reward Contribution: {-w6 * thruster_delta_reward}")
         # print(f"Thruster action penalty: {w7 * thruster_action_penalty}")
-
+        # print(reward)
         return reward
 
 # Batch based learning 2nd version
@@ -765,13 +841,13 @@ def continuous_learning(env, agent, config):
                 q_values = agent.qnetwork(state_tensor)
             current_max_q = q_values.max().item()
             max_q_value = max(max_q_value, current_max_q)
-            done = reward < -3.0 or max_q_value <= -3.0
+            done = reward < -10.0 or max_q_value <= -3.0
             # 7. Track loss if a batch update occurred in agent.step(...)
             
             if loss is not None:
                 episode_loss += loss
                 loss_steps += 1
-
+            time.sleep(0.2)
             if done:
                 break
 
@@ -782,6 +858,8 @@ def continuous_learning(env, agent, config):
         thruster_command = Int16MultiArray(data=[best_action[0], best_action[1]])
         env.thruster_action_pub.publish(thruster_command)
         print("Published final action:", best_action)
+        #temp adding till pid converges
+        # time.sleep(5)
 
         # 8. Decay epsilon after each episode
         epsilon = max(epsilon_min, epsilon_decay * epsilon)

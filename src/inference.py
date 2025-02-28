@@ -2,6 +2,7 @@ import os
 import yaml
 import torch
 import rclpy
+import time
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.qos import QoSProfile, ReliabilityPolicy
@@ -11,6 +12,7 @@ from mvp_msgs.msg import ControlProcess
 from torch_dqn import GridWorldEnv
 from torch_dqn import QNetwork
 import numpy as np
+
 
 # Load configuration from config.yaml
 config_path = os.path.join(os.path.dirname(__file__), '../config/config.yaml')
@@ -76,7 +78,7 @@ class InferenceNode(Node):
         self.default_thruster_command = [1, 1]
         
         # Declare and get parameters
-        self.declare_parameter('model_path', 'dqn_model_2025-02-24_23-13-24.pth')
+        self.declare_parameter('model_path', 'dqn_model_2025-02-28_15-24-51.pth')
         model_path = self.get_parameter('model_path').get_parameter_value().string_value
 
         # Create QoS profile for better reliability
@@ -327,6 +329,7 @@ class InferenceNode(Node):
         print("Thruster1: {} , Thruster2: {}".format(action1, action2))
         # Publish the action array
         self.thruster_action_pub.publish(thruster_command)
+        time.sleep(5)
 
 
 
