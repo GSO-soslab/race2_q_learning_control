@@ -36,6 +36,31 @@ random.seed(random_seed)
 np.random.seed(random_seed)
 torch.manual_seed(random_seed)
 
+class AdaptiveScaler:
+    def __init__(self):
+        self.observed_min = None
+        self.observed_max = None
+        
+    def update_and_normalize(self, x):
+        # Update min/max
+        if self.observed_min is None:
+            self.observed_min = x
+            self.observed_max = x
+        else:
+            self.observed_min = np.minimum(self.observed_min, x)
+            self.observed_max = np.maximum(self.observed_max, x)
+            
+        # Add margin to avoid exact boundaries
+        effective_min = self.observed_min - 0.1 * np.abs(self.observed_min)
+        effective_max = self.observed_max + 0.1 * np.abs(self.observed_max)
+        
+        # Normalize
+        range_values = effective_max - effective_min
+        # Avoid division by zero
+        range_values = np.where(range_values == 0, 1.0, range_values)
+        
+        return 2 * (x - effective_min) / range_values - 1
+    
 class DeltaBarDelta:
     def __init__(self, parameters, initial_lr=0.1, increase_factor=0.05, decrease_factor=0.7, momentum=0.9):
         self.parameters = list(parameters)
@@ -270,6 +295,8 @@ class GridWorldEnv(Node):  # Inherit from Node
     def __init__(self, config):
         super().__init__('underwater_vehicle_env')  # Initialize the ROS 2 node
 
+        self.scaler = AdaptiveScaler()
+
         # Retrieve configuration values
         self.config = config
         self.state_size = config['environment']['error_size'] + config['environment']['state_size'] + config['environment']['servo_joints_size'] + config['environment']['thruster_size']
@@ -299,11 +326,11 @@ class GridWorldEnv(Node):  # Inherit from Node
         self.sampling_time = config['environment']['sampling_time']
         self.action_mapping = {int(k): v for k, v in config['environment']['action_mapping'].items()}
         
-        # Initialize scaler for all inputs
-        self.scaler = MinMaxScaler(feature_range=(-1, 1))
+        # # Initialize scaler for all inputs
+        # self.scaler = MinMaxScaler(feature_range=(-1, 1))
 
-        # Fit scaler with dummy data initially
-        self.scaler.fit(np.zeros((1, self.state_size)))
+        # # Fit scaler with dummy data initially
+        # self.scaler.fit(np.zeros((1, self.state_size)))
 
         # Retrieve servo and thruster size from config
         self.servo_joints_size = config['environment']['servo_joints_size']
@@ -549,6 +576,7 @@ class GridWorldEnv(Node):  # Inherit from Node
     def step(self, action_index):
         if not self.use_policy:
             self.get_logger().loginfo("Policy is disabled, using static thruster command.")
+
             state = np.concatenate(
                 [self.position_err[2:3], # Depth
                  self.v_err[:2], # Surge and sway
@@ -564,7 +592,11 @@ class GridWorldEnv(Node):  # Inherit from Node
                         self.thrust_surge_starboard,
                         self.thrust_sway_stern])
                 ])
-            return state, 0, True, {}
+            
+            # Normalize state with adaptive scaler
+            normalized_state = self.scaler.update_and_normalize(next_state)
+            return normalized_state
+            # return state, 0, True, {}
 
         # Map the action index to actual action values
         action = self.action_mapping[action_index]
@@ -605,36 +637,54 @@ class GridWorldEnv(Node):  # Inherit from Node
                         self.thrust_surge_starboard,
                         self.thrust_sway_stern])
                 ])
+        
+        # Normalize state with adaptive scaler
+        normalized_next_state = self.scaler.update_and_normalize(next_state)
 
         # print("Next State:", next_state)
-        return next_state, reward, done, {}
+        return normalized_next_state, reward, done, {}
+        # return next_state, reward, done, {}
 
     def reset(self):
+        """Reset the environment to initial state and return the first observation.
+        
+        Returns:
+            numpy.ndarray: Initial state vector for the agent.
+        """
+        # Reset episode state
         self._episode_ended = False
         self.start_time = self.get_clock().now()
-
-        # Initialize joint angles randomly or to a specific value
-        # initial_joint_angles = np.random.uniform(low=-np.pi, high=np.pi, size=2)
-        # self.joint_angles = initial_joint_angles
-        # self.joint_angles = np.zeros(self.servo_joints_size)  
-              
-        # Initialize joint_positions_history with the initial joint angles
-        self.joint_positions_history = np.full(self.joint_positions_history.shape, 0)
-        # Return the initial state
-        return np.concatenate([
-            self.position_err[2:3],  # Depth error
-            self.v_err[:2],          # Surge and sway velocity error
-            self.orientation_err[:3],  # Roll, pitch, yaw orientation error
-            self.position_state[2:3],  # Depth state
-            self.v_state[:2],          # Surge and sway velocity state
-            self.orientation_state[:3],  # Roll, pitch, yaw state
-            self.omega_ref_state[2:3], 
-            self.joint_angles,          # Joint angles
-            np.array([self.thrust_heave_bow,  # Thrust components
-                    self.thrust_surge_port,
-                    self.thrust_surge_starboard,
-                    self.thrust_sway_stern])
+        
+        # Reset joint angles
+        # Option 1: Random initialization
+        # self.joint_angles = np.random.uniform(low=-np.pi, high=np.pi, size=self.servo_joints_size)
+        
+        # Option 2: Zero initialization
+        self.joint_angles = np.zeros(self.servo_joints_size)
+        
+        # Reset history buffers
+        self.joint_positions_history = np.zeros(self.joint_positions_history.shape)
+        
+        # Construct and return initial state observation
+        initial_state = np.concatenate([
+            self.position_err[2:3],         # Depth error
+            self.v_err[:2],                 # Surge and sway velocity error
+            self.orientation_err[:3],       # Roll, pitch, yaw orientation error
+            self.position_state[2:3],       # Depth state
+            self.v_state[:2],               # Surge and sway velocity state
+            self.orientation_state[:3],     # Roll, pitch, yaw state
+            self.omega_ref_state[2:3],      # Angular velocity reference
+            self.joint_angles,              # Joint angles
+            np.array([
+                self.thrust_heave_bow,      # Thrust components
+                self.thrust_surge_port,
+                self.thrust_surge_starboard,
+                self.thrust_sway_stern
+            ])
         ])
+        
+        normalized_initial_state = self.scaler.update_and_normalize(initial_state)
+        return normalized_initial_state
 
     def calculate_reward(self):
         # Reward function parameters
@@ -857,7 +907,7 @@ def continuous_learning(env, agent, config):
         best_action = env.action_mapping[best_action_index]
         thruster_command = Int16MultiArray(data=[best_action[0], best_action[1]])
         env.thruster_action_pub.publish(thruster_command)
-        print("Published final action:", best_action)
+        # print("Published final action:", best_action)
         #temp adding till pid converges
         # time.sleep(5)
 
