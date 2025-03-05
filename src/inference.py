@@ -9,7 +9,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Int16MultiArray, Float64
 from std_srvs.srv import SetBool
 from mvp_msgs.msg import ControlProcess 
-from torch_dqn import GridWorldEnv
+from torch_dqn import GridWorldEnv, AdaptiveScaler
 from torch_dqn import QNetwork
 import numpy as np
 
@@ -33,19 +33,45 @@ class InferenceAgent:
             self.logger.error(f"Failed to load model from {model_path}: {e}")
             raise
 
-    def act(self, state):
+    # def act(self, state):
+    #     # Convert state to a tensor and get action values from the Q-network
+    #     state = torch.FloatTensor(state).unsqueeze(0)
+    #     with torch.no_grad():
+    #         action_values = self.qnetwork(state)
+    #     action_index = torch.argmax(action_values).item()
+    #     return action_index
+
+    def act(self, state, epsilon=0.1):
+        """
+        Select an action using an epsilon-greedy strategy.
+        
+        Args:
+            state (numpy.ndarray): Current state
+            epsilon (float): Probability of taking a random action
+        
+        Returns:
+            int: Selected action index
+        """
         # Convert state to a tensor and get action values from the Q-network
         state = torch.FloatTensor(state).unsqueeze(0)
         with torch.no_grad():
             action_values = self.qnetwork(state)
-        action_index = torch.argmax(action_values).item()
+        
+        # Epsilon-greedy action selection
+        if np.random.random() < epsilon:
+            # Random action
+            action_index = np.random.randint(0, action_values.shape[1])
+        else:
+            # Greedy action selection
+            action_index = torch.argmax(action_values).item()
+        
         return action_index
-
 
 class InferenceNode(Node):
     def __init__(self):
         super().__init__('inference_node')
-        
+
+        self.scaler = AdaptiveScaler()
         # Create callback group for services
         self.callback_group = ReentrantCallbackGroup()
         
@@ -78,7 +104,7 @@ class InferenceNode(Node):
         self.default_thruster_command = [1, 1]
         
         # Declare and get parameters
-        self.declare_parameter('model_path', 'dqn_model_2025-02-28_15-24-51.pth')
+        self.declare_parameter('model_path', 'dqn_model_2025-03-04_17-58-14.pth')
         model_path = self.get_parameter('model_path').get_parameter_value().string_value
 
         # Create QoS profile for better reliability
@@ -211,7 +237,7 @@ class InferenceNode(Node):
 
     def get_current_state(self):
         """Returns the current state vector."""
-        return np.concatenate([
+        state = np.concatenate([
             self.position_err[2:3],  # Depth
             self.v_err[:2],          # Surge and sway
             self.orientation_err[:3], # roll, pitch, yaw
@@ -225,6 +251,9 @@ class InferenceNode(Node):
                      self.thrust_surge_starboard,
                      self.thrust_sway_stern])
         ])
+
+        normalized_state = self.scaler.update_and_normalize(state)
+        return normalized_state
 
     def publish_default_thruster_command(self):
         """Publish the default thruster command."""
@@ -306,6 +335,31 @@ class InferenceNode(Node):
     #                 self.total_reward = 0
     #                 self.get_logger().info(f"Starting Episode {self.episode}")
 
+    # def inference_loop(self):
+    #     if not self.inference_enabled:
+    #         self.publish_default_thruster_command()
+    #         return
+
+    #     # Get current state
+    #     current_state = self.get_current_state()
+        
+    #     # Add some logging to debug
+    #     # self.get_logger().info(f"Current state: {current_state}")
+        
+    #     # Get action from the policy
+    #     action_index = self.agent.act(current_state)
+        
+    #     # Create and publish thruster command
+    #     action = self.action_mapping[action_index]
+    #     action1, action2 = action  # Unpack the action values
+    #     self.thruster_action = action
+    #     # Create the array: [action1, action2]
+    #     thruster_command = Int16MultiArray(data=[action1, action2])
+    #     print("Thruster1: {} , Thruster2: {}".format(action1, action2))
+    #     # Publish the action array
+    #     self.thruster_action_pub.publish(thruster_command)
+    #     time.sleep(0.205)
+
     def inference_loop(self):
         if not self.inference_enabled:
             self.publish_default_thruster_command()
@@ -314,24 +368,26 @@ class InferenceNode(Node):
         # Get current state
         current_state = self.get_current_state()
         
-        # Add some logging to debug
+        # Optional: Log or print the current state for debugging
         # self.get_logger().info(f"Current state: {current_state}")
         
-        # Get action from the policy
-        action_index = self.agent.act(current_state)
+        # Get action from the policy with some exploration
+        action_index = self.agent.act(current_state, epsilon=0.1)  # 10% random exploration
         
-        # Create and publish thruster command
+        # Map action index to actual thruster commands
         action = self.action_mapping[action_index]
         action1, action2 = action  # Unpack the action values
-        self.thruster_action = action
-        # Create the array: [action1, action2]
+        
+        # Optional: Log the selected action and its corresponding Q-values
+        state_tensor = torch.FloatTensor(current_state).unsqueeze(0)
+        with torch.no_grad():
+            q_values = self.agent.qnetwork(state_tensor)
+            self.get_logger().info(f"Q-values: {q_values.numpy()[0]}")
+            self.get_logger().info(f"Selected action: {action_index}, Thruster command: [{action1}, {action2}]")
+        
+        # Create and publish thruster command
         thruster_command = Int16MultiArray(data=[action1, action2])
-        print("Thruster1: {} , Thruster2: {}".format(action1, action2))
-        # Publish the action array
         self.thruster_action_pub.publish(thruster_command)
-        time.sleep(5)
-
-
 
 def main(args=None):
     rclpy.init(args=args)

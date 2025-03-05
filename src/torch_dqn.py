@@ -593,8 +593,7 @@ class GridWorldEnv(Node):  # Inherit from Node
                         self.thrust_sway_stern])
                 ])
             
-            # Normalize state with adaptive scaler
-            normalized_state = self.scaler.update_and_normalize(next_state)
+            normalized_state = self.scaler.update_and_normalize(state)
             return normalized_state
             # return state, 0, True, {}
 
@@ -915,7 +914,8 @@ def continuous_learning(env, agent, config):
         epsilon = max(epsilon_min, epsilon_decay * epsilon)
 
         # 9. Calculate average loss for the episode
-        average_loss = episode_loss / loss_steps if loss_steps > 0 else 0.0
+        # average_loss = episode_loss / loss_steps if loss_steps >= 0 else 0.0
+        average_loss = episode_loss
 
         # 10. Store metrics for plotting
         episodes.append(episode_count)

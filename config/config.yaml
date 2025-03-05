@@ -8,11 +8,11 @@ agent:
   buffer_size: 10000  # Maximum size of the replay buffer
   batch_size: 128      # Number of experiences sampled from replay buffer for training
   gamma: 0.96         # Discount factor for future rewards
-  learning_rate: 0.001  # Learning rate for the optimizer
+  learning_rate: 0.0001  # Learning rate for the optimizer
   optimizer: "delta_bar_delta"  # specify optimizer type
-  dbd_increase_factor: 0.05  # kappa: how much to increase learning rate
-  dbd_decrease_factor: 0.5   # phi: how much to decrease learning rate
-  dbd_momentum: 0.5          # alpha: momentum factor
+  dbd_increase_factor: 0.00001  # kappa: how much to increase learning rate
+  dbd_decrease_factor: 0.005   # phi: how much to decrease learning rate
+  dbd_momentum: 0.005          # alpha: momentum factor
   tau: 0.05           # Soft update factor for target network
   epsilon_initial: 1.0  # Initial exploration rate for epsilon-greedy policy
   epsilon_decay: 0.994   # Rate at which epsilon decays per episode
@@ -51,9 +51,9 @@ environment:
 
 reward_function:
   w1: 1.0              # Weight for performance error
-  w2: 0.0             # Weight for servo smoothness penalty
+  w2: 0.2             # Weight for servo smoothness penalty
   w3: 0.0              # Weight for thruster usage penalty (keep zero)
-  w4: 0.0              # Weight for thruster smoothness penalty
+  w4: 0.2              # Weight for thruster smoothness penalty
   w5: 0.0              # Weight for servo angle penalty (keep zero)
   w6: 0.0              # Weight for thruster delta reward
   w7: 0.0              # Weight for action delta reward
@@ -79,7 +79,7 @@ reward_function:
 
 training:
   max_episodes: 5000    # Maximum episodes for training
-  max_t: 100        # Maximum steps per episode
+  max_t: 1        # Maximum steps per episode
   target_avg_reward: 20  # Target average reward for early stopping
   plot_interval: 2    # Interval for updating plots during training
   random_seed: 42      # Random seed for reproducibility
