@@ -386,7 +386,7 @@ class GridWorldEnv(Node):  # Inherit from Node
                                 10)
         
         self.create_subscription(ControlProcess, 
-                                 '/race2_auv/controller/process/state', 
+                                 '/race2_auv/controller/process/value', 
                                  self.update_current_state, 
                                  10)
         
@@ -516,7 +516,7 @@ class GridWorldEnv(Node):  # Inherit from Node
         self.orientation_state = raw_orientation_state
         self.v_state = raw_v_state
         self.omega_ref_state = raw_omega_ref_state
-        self.get_logger().info(f"Updated state - Position: {self.position_state}, Orientation: {self.orientation_state}")
+        # self.get_logger().info(f"Updated state - Position: {self.position_state}, Orientation: {self.orientation_state}")
 
     def update_current_setpoint(self, data):
 
@@ -577,7 +577,7 @@ class GridWorldEnv(Node):  # Inherit from Node
         if not self.use_policy:
             self.get_logger().loginfo("Policy is disabled, using static thruster command.")
 
-            state = np.concatenate(
+            step_state = np.concatenate(
                 [self.position_err[2:3], # Depth
                  self.v_err[:2], # Surge and sway
                  self.orientation_err[:3], # roll, pitch, yaw
@@ -593,7 +593,7 @@ class GridWorldEnv(Node):  # Inherit from Node
                         self.thrust_sway_stern])
                 ])
             
-            normalized_state = self.scaler.update_and_normalize(state)
+            normalized_state = self.scaler.update_and_normalize(step_state)
             return normalized_state
             # return state, 0, True, {}
 
@@ -767,7 +767,7 @@ class GridWorldEnv(Node):  # Inherit from Node
         direction_change_penalty = w8 * thruster_action_penalty ** 2  # Quadratic penalty
 
         # Total reward
-        reward =   - (
+        reward =   -(
             - w1 * performance_error +
             w2 * servo_smoothness_penalty +
             w3 * thruster_usage_penalty +
@@ -895,14 +895,14 @@ def continuous_learning(env, agent, config):
             
             if loss is not None:
                 episode_loss += loss
-                loss_steps += 1
+                # loss_steps += 1
             time.sleep(0.2)
             if done:
                 break
 
         # After training is complete, publish the final selected action
-        print("Episode complete. Publishing final action...")
-        best_action_index = agent.act(state, epsilon=0)  # Select best action greedily
+        # print("Episode complete. Publishing final action...")
+        best_action_index = agent.act(state, epsilon=0.0)  # Select best action greedily
         best_action = env.action_mapping[best_action_index]
         thruster_command = Int16MultiArray(data=[best_action[0], best_action[1]])
         env.thruster_action_pub.publish(thruster_command)
@@ -998,7 +998,7 @@ def update_plots(ax, episodes, reward_history, episode_durations, loss_history,
     ax[2].autoscale_view()
 
     plt.draw()
-    plt.pause(0.2)  # Pause to update the plots
+    plt.pause(0.01)  # Pause to update the plots
 
 
 def save_model(agent, filename_prefix='dqn_model'):

@@ -104,7 +104,7 @@ class InferenceNode(Node):
         self.default_thruster_command = [1, 1]
         
         # Declare and get parameters
-        self.declare_parameter('model_path', 'dqn_model_2025-03-04_17-58-14.pth')
+        self.declare_parameter('model_path', 'dqn_model_2025-03-07_16-07-20.pth')
         model_path = self.get_parameter('model_path').get_parameter_value().string_value
 
         # Create QoS profile for better reliability
@@ -131,7 +131,7 @@ class InferenceNode(Node):
         
         self.create_subscription(
             ControlProcess, 
-            '/race2_auv/controller/process/state', 
+            '/race2_auv/controller/process/value', 
             self.update_current_state, 
             10)
             
@@ -194,7 +194,7 @@ class InferenceNode(Node):
 
         # Create timer for main loop with callback group
         self.timer = self.create_timer(
-            0.2,  # 5Hz rate
+            0.19996,  # 5Hz rate
             self.inference_loop,
             callback_group=self.callback_group
         )
@@ -372,7 +372,7 @@ class InferenceNode(Node):
         # self.get_logger().info(f"Current state: {current_state}")
         
         # Get action from the policy with some exploration
-        action_index = self.agent.act(current_state, epsilon=0.1)  # 10% random exploration
+        action_index = self.agent.act(current_state, epsilon=0.1)  # 2% random exploration
         
         # Map action index to actual thruster commands
         action = self.action_mapping[action_index]
