@@ -612,8 +612,8 @@ class GridWorldEnv(Node):  # Inherit from Node
         elapsed_time_total = current_time - self.start_time.seconds_nanoseconds()[0]
 
         # Determine if the episode has ended
-        # done = elapsed_time_total > self.max_episode_duration
-        done = True  # Assume episode ends after one action
+        done = elapsed_time_total > self.max_episode_duration
+        # done = True  # Assume episode ends after one action
         if done:
             self._episode_ended = True
 
@@ -693,6 +693,27 @@ class GridWorldEnv(Node):  # Inherit from Node
 
         # Compute the error vector
         ###Temporarily error is setpoint#######
+        # prev_wrapped_angle = self.orientation_err[0]  # Initial value
+        # rotation_count = 0  # Start with no rotations
+
+        # # Then in your update loop or whenever you get new orientation data:
+        # current_wrapped_angle = self.orientation_err[0]  # Get current wrapped angle
+
+        # # Calculate difference
+        # diff = current_wrapped_angle - prev_wrapped_angle
+
+        # # Detect and handle angle jumps
+        # if diff < -np.pi:  # For radians (use -180 for degrees)
+        #     rotation_count += 1
+        # elif diff > np.pi:  # For radians (use 180 for degrees)
+        #     rotation_count -= 1
+
+        # # Calculate unwrapped angle
+        # unwrapped_angle = current_wrapped_angle + 2 * np.pi * rotation_count
+        # self.orientation_err[2] = unwrapped_angle
+        # # Update the previous angle for next time
+        # prev_wrapped_angle = current_wrapped_angle
+        
         error = np.concatenate(
             [self.position_err[2:3], # Depth
              self.v_err[:2], # Surge and sway
@@ -798,7 +819,7 @@ def continuous_learning(env, agent, config):
     epsilon_min = config['agent']['epsilon_min']
 
     episode_count = 0
-    rate = env.create_rate(50)
+    # rate = env.create_rate(50)
 
     # Initialize plotting
     plt.ion()
@@ -882,6 +903,7 @@ def continuous_learning(env, agent, config):
             episode_duration_count = step_count + 1
             #step avg reward
             average_reward = total_reward / step_count if step_count > 0 else 0.0
+            # done = reward < -1.0 or max_q_value <= -1.0
 
             # 6. Log the max Q-value for debugging/analysis
             # state_tensor = torch.FloatTensor(state).unsqueeze(0)
@@ -890,13 +912,12 @@ def continuous_learning(env, agent, config):
                 q_values = agent.qnetwork(state_tensor)
             current_max_q = q_values.max().item()
             max_q_value = max(max_q_value, current_max_q)
-            done = reward < -10.0 or max_q_value <= -3.0
             # 7. Track loss if a batch update occurred in agent.step(...)
             
             if loss is not None:
                 episode_loss += loss
                 # loss_steps += 1
-            time.sleep(0.2)
+            # time.sleep(0.001)
             if done:
                 break
 
@@ -965,7 +986,7 @@ def continuous_learning(env, agent, config):
             next_state, reward, done, _ = env.step(action_index)
             state = next_state
             total_reward += reward
-            rate.sleep()
+            # rate.sleep()
 
         print(f"Episode completed with total reward: {total_reward}")
 
