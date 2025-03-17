@@ -89,6 +89,9 @@ class InferenceNode(Node):
         self.v_state = np.zeros(3)
         self.orientation_state = np.zeros(3)
         self.omega_ref_state = np.zeros(3)
+        self.position_setpoint = np.zeros(3)
+        self.v_setpoint = np.zeros(3)
+        self.orientation_setpoint = np.zeros(3)
         self.joint_angles_port = 0.0
         self.joint_angles_starboard = 0.0
         self.joint_angles = [0.0, 0.0]
@@ -104,7 +107,7 @@ class InferenceNode(Node):
         self.default_thruster_command = [1, 1]
         
         # Declare and get parameters
-        self.declare_parameter('model_path', 'dqn_model_2025-03-10_15-57-46.pth')
+        self.declare_parameter('model_path', 'dqn_model_2025-03-15_21-43-36.pth')
         model_path = self.get_parameter('model_path').get_parameter_value().string_value
 
         # Create QoS profile for better reliability
@@ -122,7 +125,7 @@ class InferenceNode(Node):
             self.get_logger()
         )
         
-                # Create all subscribers
+        # Create all subscribers
         self.create_subscription(
             ControlProcess, 
             '/race2_auv/controller/process/error', 
@@ -135,6 +138,12 @@ class InferenceNode(Node):
             self.update_current_state, 
             10)
             
+        self.create_subscription(
+            ControlProcess, 
+            '/race2_auv/controller/process/setpoint', 
+            self.update_current_setpoint, 
+            10)
+        
         self.create_subscription(
             Float64, 
             '/race2_auv/control/surge_port_servo', 
@@ -194,7 +203,7 @@ class InferenceNode(Node):
 
         # Create timer for main loop with callback group
         self.timer = self.create_timer(
-            0.19996,  # 5Hz rate
+            0.05,  # 5Hz rate
             self.inference_loop,
             callback_group=self.callback_group
         )
@@ -214,6 +223,12 @@ class InferenceNode(Node):
         self.orientation_state = np.array([data.orientation.x, data.orientation.y, data.orientation.z])
         self.v_state = np.array([data.velocity.x, data.velocity.y, data.velocity.z])
         self.omega_ref_state = np.array([data.angular_rate.x, data.angular_rate.y, data.angular_rate.z])
+
+    def update_current_setpoint(self, data):
+        self.position_setpoint = np.array([data.position.x, data.position.y, data.position.z])
+        self.orientation_setpoint = np.array([data.orientation.x, data.orientation.y, data.orientation.z])
+        self.v_setpoint = np.array([data.velocity.x, data.velocity.y, data.velocity.z])
+        self.omega_ref_setpoint = np.array([data.angular_rate.x, data.angular_rate.y, data.angular_rate.z])
 
     def update_joint_port(self, data):
         self.joint_angles_port = data.data
@@ -255,6 +270,16 @@ class InferenceNode(Node):
         normalized_state = self.scaler.update_and_normalize(state)
         return normalized_state
 
+    def get_current_setpoint(self):
+        """Returns the current setpoint vector."""
+        setpoint = np.concatenate([
+            self.position_setpoint[2:3],
+            self.v_setpoint[:2],
+            self.orientation_setpoint[:3],
+        ])
+
+        return setpoint
+    
     def publish_default_thruster_command(self):
         """Publish the default thruster command."""
         msg = Int16MultiArray()
@@ -306,84 +331,82 @@ class InferenceNode(Node):
             return False
 
     # def inference_loop(self):
-    #     """Main inference loop."""
-    #     if not self.inference_enabled:
-    #         # Publish default thruster command
-    #         self.publish_default_thruster_command()
-    #         return
-
-    #     if self.current_state is not None and not self.done:
-    #         # Get action from the policy
-    #         self.current_state = self.get_current_state()
-    #         # print("Current State:", self.current_state)
-    #         action_index = self.agent.act(self.current_state)
-    #         print("Action Index", action_index)
-    #         # Take the action in the environment
-    #         next_state, reward, done, _ = self.env.step(action_index)
-    #         # print(next_state)
-    #         self.current_state = next_state
-    #         self.total_reward += reward
-    #         # print(self.total_reward)
-    #         self.done = done
-
-    #         if self.done:
-    #             self.get_logger().info(f"Episode {self.episode} completed with total reward: {self.total_reward}")
-    #             if self.inference_enabled:  # Only start new episode if still enabled
-    #                 self.episode += 1
-    #                 self.current_state = self.env.reset()
-    #                 self.done = False
-    #                 self.total_reward = 0
-    #                 self.get_logger().info(f"Starting Episode {self.episode}")
-
-    # def inference_loop(self):
     #     if not self.inference_enabled:
     #         self.publish_default_thruster_command()
     #         return
 
     #     # Get current state
     #     current_state = self.get_current_state()
-        
-    #     # Add some logging to debug
+
+    #     # Optional: Log or print the current state for debugging
     #     # self.get_logger().info(f"Current state: {current_state}")
         
-    #     # Get action from the policy
-    #     action_index = self.agent.act(current_state)
+    #     # Get action from the policy with some exploration
+    #     action_index = self.agent.act(current_state, epsilon=0.05)  # 2% random exploration
         
-    #     # Create and publish thruster command
+    #     # Map action index to actual thruster commands
     #     action = self.action_mapping[action_index]
     #     action1, action2 = action  # Unpack the action values
-    #     self.thruster_action = action
-    #     # Create the array: [action1, action2]
+        
+    #     # Optional: Log the selected action and its corresponding Q-values
+    #     state_tensor = torch.FloatTensor(current_state).unsqueeze(0)
+    #     with torch.no_grad():
+    #         q_values = self.agent.qnetwork(state_tensor)
+    #         self.get_logger().info(f"Q-values: {q_values.numpy()[0]}")
+    #         self.get_logger().info(f"Selected action: {action_index}, Thruster command: [{action1}, {action2}]")
+        
+    #     # Create and publish thruster command
     #     thruster_command = Int16MultiArray(data=[action1, action2])
-    #     print("Thruster1: {} , Thruster2: {}".format(action1, action2))
-    #     # Publish the action array
     #     self.thruster_action_pub.publish(thruster_command)
-    #     time.sleep(0.205)
 
     def inference_loop(self):
         if not self.inference_enabled:
             self.publish_default_thruster_command()
             return
-
+            
         # Get current state
         current_state = self.get_current_state()
         
-        # Optional: Log or print the current state for debugging
-        # self.get_logger().info(f"Current state: {current_state}")
+        # Keep track of prev state for diagnostics
+        if hasattr(self, 'prev_state'):
+            # Calculate some metrics to detect if stuck
+            state_change = np.mean(np.abs(np.array(current_state[1]) - np.array(self.prev_state[1])))
+            self.get_logger().info(f"State change magnitude: {state_change}")
+            
+            if state_change < 0.01:  # Adjust threshold as needed
+                self.stuck_counter = getattr(self, 'stuck_counter', 0) + 1
+                if self.stuck_counter > 50:  # If stuck for several iterations
+                    # Add small random noise to break out of loops
+                    action_index = np.random.randint(0, len(self.action_mapping)-1)
+                    self.get_logger().warning("Agent appears stuck! Using random action.")
+                else:
+                    action_index = self.agent.act(current_state, epsilon=0.0)
+            else:
+                self.stuck_counter = 0
+                action_index = self.agent.act(current_state, epsilon=0.0)
+        else:
+            action_index = self.agent.act(current_state, epsilon=0.0)
         
-        # Get action from the policy with some exploration
-        action_index = self.agent.act(current_state, epsilon=0.1)  # 2% random exploration
+        self.prev_state = current_state
         
         # Map action index to actual thruster commands
         action = self.action_mapping[action_index]
-        action1, action2 = action  # Unpack the action values
+        action1, action2 = action
         
-        # Optional: Log the selected action and its corresponding Q-values
+        # Log diagnostics
         state_tensor = torch.FloatTensor(current_state).unsqueeze(0)
         with torch.no_grad():
             q_values = self.agent.qnetwork(state_tensor)
-            self.get_logger().info(f"Q-values: {q_values.numpy()[0]}")
-            self.get_logger().info(f"Selected action: {action_index}, Thruster command: [{action1}, {action2}]")
+            q_values = (q_values - q_values.mean()) / (q_values.std() + 1e-5)
+            action_index = torch.argmax(q_values).item()
+            
+        # Check for very similar Q-values (another indicator of problems)
+        q_range = q_values.max().item() - q_values.min().item()
+        if q_range < 0.1:  # If Q-values are nearly identical
+            self.get_logger().warning(f"Q-values too similar: {q_values.numpy()[0]}, range: {q_range}")
+            
+        self.get_logger().info(f"Q-values: {q_values.numpy()[0]}")
+        self.get_logger().info(f"Selected action: {action_index}, Thruster command: [{action1}, {action2}]")
         
         # Create and publish thruster command
         thruster_command = Int16MultiArray(data=[action1, action2])

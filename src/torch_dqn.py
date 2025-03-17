@@ -153,7 +153,11 @@ class ReplayBuffer:
 
 class Agent:
     def __init__(self, state_size, action_size, config):
-        self.state_size = config['environment']['error_size'] + config['environment']['state_size'] + config['environment']['servo_joints_size'] + config['environment']['thruster_size']
+        self.state_size = (config['environment']['error_size'] 
+                           + config['environment']['state_size'] 
+                           + config['environment']['servo_joints_size'] 
+                           + config['environment']['thruster_size'])
+        
         print("State size:", self.state_size)
         self.action_size = action_size
         self.gamma = config['agent']['gamma']
@@ -299,7 +303,11 @@ class GridWorldEnv(Node):  # Inherit from Node
 
         # Retrieve configuration values
         self.config = config
-        self.state_size = config['environment']['error_size'] + config['environment']['state_size'] + config['environment']['servo_joints_size'] + config['environment']['thruster_size']
+        self.state_size = (config['environment']['error_size'] + config['environment']['state_size']
+                           + config['environment']['servo_joints_size']
+                           + config['environment']['thruster_size']
+                           + config['environment']['setpoint_size'])
+        
         self.action_size = config['environment']['action_size']
         
         # Initialize state and action values
@@ -582,10 +590,13 @@ class GridWorldEnv(Node):  # Inherit from Node
                  self.v_err[:2], # Surge and sway
                  self.orientation_err[:3], # roll, pitch, yaw
                 #  self.omega_ref_err[2:3],
-                 self.position_state[2:3],
-                 self.v_state[:2],
-                 self.orientation_state[:3],
-                 self.omega_ref_state[2:3],
+                #  self.position_state[2:3],
+                #  self.v_state[:2],
+                #  self.orientation_state[:3],
+                #  self.omega_ref_state[2:3],
+                #  self.position_setpoint[2:3],
+                #  self.v_setpoint[:2],
+                #  self.orientation_setpoint[:3],
                  self.joint_angles,         
                  np.array([self.thrust_heave_bow,  # Thrust components
                         self.thrust_surge_port,
@@ -604,8 +615,24 @@ class GridWorldEnv(Node):  # Inherit from Node
         # Create the array: [action1, action2]
         thruster_command = Int16MultiArray(data=[action1, action2])
 
-        # Publish the action array
-        # self.thruster_action_pub.publish(thruster_command)
+        # # Publish the action array
+        self.thruster_action_pub.publish(thruster_command)
+
+
+        # # Assuming previous_step_state exists and is initialized
+        # previous_step_setpoint = np.zeros(6)  # Modify based on actual dimensions
+
+        # # Current step_state
+        # step_setpoint = np.concatenate([
+        #     self.position_setpoint[2:3],  # Depth
+        #     self.v_setpoint[:2],  # Surge and sway
+        #     self.orientation_setpoint[:3]  # Roll, pitch, yaw
+        # ])
+
+        # # Check if any value has changed
+        # if not np.array_equal(step_setpoint, previous_step_setpoint):
+        #     self.thruster_action_pub.publish(thruster_command)
+        #     previous_step_setpoint = step_setpoint.copy()
 
         # time.sleep(self.sampling_time)
         current_time = self.get_clock().now().seconds_nanoseconds()[0]
@@ -625,12 +652,15 @@ class GridWorldEnv(Node):  # Inherit from Node
                 [self.position_err[2:3], # Depth
                  self.v_err[:2], # Surge and sway
                  self.orientation_err[:3], # roll, pitch, yaw
-                 #self.omega_ref_err
-                 self.position_state[2:3],
-                 self.v_state[:2],
-                 self.orientation_state[:3],
-                 self.omega_ref_state[2:3],
-                 self.joint_angles,
+                #  self.omega_ref_err[2:3],
+                #  self.position_state[2:3],
+                #  self.v_state[:2],
+                #  self.orientation_state[:3],
+                #  self.omega_ref_state[2:3],
+                #  self.position_setpoint[2:3],
+                #  self.v_setpoint[:2],
+                #  self.orientation_setpoint[:3],
+                 self.joint_angles,         
                  np.array([self.thrust_heave_bow,  # Thrust components
                         self.thrust_surge_port,
                         self.thrust_surge_starboard,
@@ -665,22 +695,24 @@ class GridWorldEnv(Node):  # Inherit from Node
         self.joint_positions_history = np.zeros(self.joint_positions_history.shape)
         
         # Construct and return initial state observation
-        initial_state = np.concatenate([
-            self.position_err[2:3],         # Depth error
-            self.v_err[:2],                 # Surge and sway velocity error
-            self.orientation_err[:3],       # Roll, pitch, yaw orientation error
-            self.position_state[2:3],       # Depth state
-            self.v_state[:2],               # Surge and sway velocity state
-            self.orientation_state[:3],     # Roll, pitch, yaw state
-            self.omega_ref_state[2:3],      # Angular velocity reference
-            self.joint_angles,              # Joint angles
-            np.array([
-                self.thrust_heave_bow,      # Thrust components
-                self.thrust_surge_port,
-                self.thrust_surge_starboard,
-                self.thrust_sway_stern
-            ])
-        ])
+        initial_state = np.concatenate(
+                [self.position_err[2:3], # Depth
+                 self.v_err[:2], # Surge and sway
+                 self.orientation_err[:3], # roll, pitch, yaw
+                #  self.omega_ref_err[2:3],
+                #  self.position_state[2:3],
+                #  self.v_state[:2],
+                #  self.orientation_state[:3],
+                #  self.omega_ref_state[2:3],
+                #  self.position_setpoint[2:3],
+                #  self.v_setpoint[:2],
+                #  self.orientation_setpoint[:3],
+                 self.joint_angles,         
+                 np.array([self.thrust_heave_bow,  # Thrust components
+                        self.thrust_surge_port,
+                        self.thrust_surge_starboard,
+                        self.thrust_sway_stern])
+                ])
         
         normalized_initial_state = self.scaler.update_and_normalize(initial_state)
         return normalized_initial_state
@@ -910,23 +942,24 @@ def continuous_learning(env, agent, config):
             state_tensor = torch.FloatTensor(state).unsqueeze(0).to(device)
             with torch.no_grad():
                 q_values = agent.qnetwork(state_tensor)
+            # print("Qvalues:",q_values)
             current_max_q = q_values.max().item()
             max_q_value = max(max_q_value, current_max_q)
             # 7. Track loss if a batch update occurred in agent.step(...)
             
             if loss is not None:
                 episode_loss += loss
-                # loss_steps += 1
-            # time.sleep(0.001)
+                loss_steps += 1
+            time.sleep(0.02)
             if done:
                 break
 
         # After training is complete, publish the final selected action
         # print("Episode complete. Publishing final action...")
-        best_action_index = agent.act(state, epsilon=0.0)  # Select best action greedily
-        best_action = env.action_mapping[best_action_index]
-        thruster_command = Int16MultiArray(data=[best_action[0], best_action[1]])
-        env.thruster_action_pub.publish(thruster_command)
+        # best_action_index = agent.act(state, epsilon=0.0)  # Select best action greedily
+        # best_action = env.action_mapping[best_action_index]
+        # thruster_command = Int16MultiArray(data=[best_action[0], best_action[1]])
+        # env.thruster_action_pub.publish(thruster_command)
         # print("Published final action:", best_action)
         #temp adding till pid converges
         # time.sleep(5)
@@ -935,8 +968,8 @@ def continuous_learning(env, agent, config):
         epsilon = max(epsilon_min, epsilon_decay * epsilon)
 
         # 9. Calculate average loss for the episode
-        # average_loss = episode_loss / loss_steps if loss_steps >= 0 else 0.0
-        average_loss = episode_loss
+        average_loss = episode_loss / loss_steps if loss_steps > 0 else 0.0
+        # average_loss = episode_loss
 
         # 10. Store metrics for plotting
         episodes.append(episode_count)
