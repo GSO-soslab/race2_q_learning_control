@@ -264,29 +264,60 @@ class DDPG_ROS2(Node):
         
         # ROS2 subscriber for AUV state
         self.state_sub = self.create_subscription(
-            Pose,  # Replace with your actual AUVState message type
-            '/auv/state',
+            ControlProcess,  
+            '/race2_auv/controller/process/value',
             self.state_callback,
+            10
+        )
+
+        # ROS2 subscriber for setpoint
+        self.setpoint_sub = self.create_subscription(
+            ControlProcess, 
+            '/race2_auv/controller/process/setpoint', 
+            self.setpoint_callback,
             10
         )
         
         # Training parameters
         self.declare_parameter('training_mode', True)
         self.declare_parameter('max_steps', 1000)
-        self.declare_parameter('goal_position', [0.0, 0.0, 0.0])
-        self.declare_parameter('goal_orientation', [0.0, 0.0, 0.0])
         self.declare_parameter('model_path', '')
         
         self.training_mode = self.get_parameter('training_mode').value
         self.max_steps = self.get_parameter('max_steps').value
-        self.goal_pos = np.array(self.get_parameter('goal_position').value)
-        self.goal_ori = np.array(self.get_parameter('goal_orientation').value)
         model_path = self.get_parameter('model_path').value
         
         # State tracking
         self.current_state = None
         self.prev_state = None
         self.prev_action = None
+        
+        # Initialize state variables
+        self.position_state = np.zeros(3)
+        self.orientation_state = np.zeros(3)
+        self.v_state = np.zeros(3)
+        self.omega_ref_state = np.zeros(3)
+        
+        # Initialize setpoint variables
+        self.position_setpoint = np.zeros(3)
+        self.orientation_setpoint = np.zeros(3)
+        self.v_setpoint = np.zeros(3)
+        self.omega_ref_setpoint = np.zeros(3)
+        
+        # Initialize error variables
+        self.position_err = np.zeros(3)
+        self.orientation_err = np.zeros(3)
+        self.v_err = np.zeros(3)
+        self.omega_ref_err = np.zeros(3)
+        
+        # Initialize actuator variables
+        self.thruster_action = np.zeros(4)  # For the 4 thrusters
+        self.joint_angles = np.zeros(2)     # For the 2 servo angles
+        
+        # Initialize history arrays for smoothness calculations
+        self.joint_positions_history = np.zeros((10, 2))  # Store last 10 servo positions
+        self.u_prev = np.zeros((10, 4))  # Store last 10 thruster commands
+        self.thruster_command_action_prev = np.zeros((10, 4))  # Store last 10 thruster actions
         
         # Load model if available
         if model_path:
@@ -304,27 +335,138 @@ class DDPG_ROS2(Node):
         # Create timer for control loop
         self.timer = self.create_timer(0.1, self.control_loop)  # 10 Hz control loop
         
-    def state_callback(self, msg):
-        """Process incoming AUV state message"""
-        # Extract data from ROS2 message
-        # Note: Adjust this based on your actual message type structure
-        position = np.array([msg.position.x, msg.position.y, msg.position.z])
-        # Extract quaternion for orientation (you might need to convert to Euler angles)
-        orientation = np.array([
-            msg.orientation.x,
-            msg.orientation.y,
-            msg.orientation.z
+    def state_callback(self, data):
+        """Process state updates from sensors"""
+        # Extract state values
+        self.position_state = np.array([data.position.x, data.position.y, data.position.z])
+        self.orientation_state = np.array([data.orientation.x, data.orientation.y, data.orientation.z])
+        self.v_state = np.array([data.velocity.x, data.velocity.y, data.velocity.z])
+        self.omega_ref_state = np.array([data.angular_rate.x, data.angular_rate.y, data.angular_rate.z])
+        
+        # Update current state for RL agent
+        self.current_state = np.concatenate([
+            self.position_state,
+            self.orientation_state,
+            self.v_state,
+            self.omega_ref_state
         ])
         
-        # If you have velocity and angular rate in a different message,
-        # you'll need to subscribe to that as well
-        # For now, we'll assume they're part of the state message or available elsewhere
-        velocity = np.array([0.0, 0.0, 0.0])  # Replace with actual velocity data
-        angular_rate = np.array([0.0, 0.0, 0.0])  # Replace with actual angular rate data
+        # Calculate errors
+        self.update_errors()
+
+    def setpoint_callback(self, data):
+        """Process setpoint updates"""
+        self.position_setpoint = np.array([data.position.x, data.position.y, data.position.z])
+        self.orientation_setpoint = np.array([data.orientation.x, data.orientation.y, data.orientation.z])
+        self.v_setpoint = np.array([data.velocity.x, data.velocity.y, data.velocity.z])
+        self.omega_ref_setpoint = np.array([data.angular_rate.x, data.angular_rate.y, data.angular_rate.z])
         
-        # Combine into state vector
-        self.current_state = np.concatenate([position, orientation, velocity, angular_rate])
+        # Update errors after setpoint changes
+        self.update_errors()
+
+    def update_errors(self):
+        """Calculate errors between current state and setpoint"""
+        if hasattr(self, 'position_state') and hasattr(self, 'position_setpoint'):
+            self.position_err = self.position_setpoint - self.position_state
+            
+            # Handle orientation errors (accounting for angle wrapping)
+            self.orientation_err = self.orientation_setpoint - self.orientation_state
+            # Normalize angles to [-pi, pi]
+            self.orientation_err = np.array([
+                (angle + np.pi) % (2 * np.pi) - np.pi 
+                for angle in self.orientation_err
+            ])
+            
+            self.v_err = self.v_setpoint - self.v_state
+            self.omega_ref_err = self.omega_ref_setpoint - self.omega_ref_state
+
+    def publish_action(self, action):
+        """Publish actions to ROS2 topics"""
+        # Split action into thruster commands and servo angles
+        thruster_cmds = action[:4]
+        servo_angles = action[4:]
         
+        # Store for reward calculation
+        self.thruster_action = thruster_cmds
+        self.joint_angles = servo_angles
+        
+        # Map to appropriate publishers
+        thruster_mapping = [
+            ('heave_bow', thruster_cmds[0]),
+            ('surge_port', thruster_cmds[1]),
+            ('surge_starboard', thruster_cmds[2]),
+            ('heave_stern', thruster_cmds[3]),
+            ('port_servo', servo_angles[0]),
+            ('starboard_servo', servo_angles[1])
+        ]
+        
+        # Publish commands
+        for name, value in thruster_mapping:
+            msg = Float64()
+            msg.data = float(value)
+            self.thruster_pubs[name].publish(msg)
+
+    def calculate_reward(self, prev_state, current_state):
+        """Calculate reward based on specified error components"""
+        # Extract specific error components as requested
+        depth_error = np.abs(self.position_err[2])  # Z-axis (depth) error
+        surge_sway_error = np.linalg.norm(self.v_err[:2])  # X,Y velocity errors
+        orientation_error = np.linalg.norm(self.orientation_err)  # All orientation errors
+        
+        # Calculate exponential rewards (higher when errors are smaller)
+        depth_reward = np.exp(-3.0 * depth_error)
+        surge_sway_reward = np.exp(-2.0 * surge_sway_error)
+        orientation_reward = np.exp(-2.0 * orientation_error)
+        
+        # Control effort penalty (lower when using less thruster power)
+        thruster_effort = np.sum(np.abs(self.thruster_action))
+        thruster_penalty = 0.1 * thruster_effort
+        
+        # Control smoothness penalty
+        if len(self.thruster_command_action_prev) > 1:
+            smoothness_penalty = 0.2 * np.linalg.norm(
+                self.thruster_action - self.thruster_command_action_prev[-1]
+            )
+        else:
+            smoothness_penalty = 0
+        
+        # Servo angle penalty (discourage extreme servo angles)
+        servo_angle_penalty = 0.1 * np.linalg.norm(self.joint_angles)
+        
+        # Update history arrays
+        self.thruster_command_action_prev = np.vstack((
+            self.thruster_command_action_prev[1:],
+            self.thruster_action
+        ))
+        
+        self.joint_positions_history = np.vstack((
+            self.joint_positions_history[1:],
+            self.joint_angles
+        ))
+        
+        # Combined reward with weights
+        reward = (
+            4.0 * depth_reward +          # Depth control is highest priority
+            3.0 * surge_sway_reward +     # XY velocity control is second priority
+            2.0 * orientation_reward -    # Orientation control is third priority
+            thruster_penalty -            # Minimize thruster usage
+            smoothness_penalty -          # Encourage smooth control
+            servo_angle_penalty           # Avoid extreme servo angles
+        )
+        
+        return reward
+
+    def is_done(self, state):
+        """Check if episode should terminate"""
+        # Check if we're close enough to the setpoints
+        depth_error = np.abs(self.position_err[2])
+        surge_sway_error = np.linalg.norm(self.v_err[:2])
+        orientation_error = np.linalg.norm(self.orientation_err)
+        
+        # Done if all errors are small enough
+        done = (depth_error < 0.1) and (surge_sway_error < 0.1) and (orientation_error < 0.1)
+        return done
+
     def control_loop(self):
         """Main control loop"""
         if self.current_state is not None:
@@ -367,92 +509,92 @@ class DDPG_ROS2(Node):
             # Store state and action for training
             self.prev_state = self.current_state
             self.prev_action = action
-        
-    def calculate_reward(self, prev_state, current_state):
-        """Calculate reward based on state transition"""
-        # Extract position and orientation from states
-        prev_pos = prev_state[:3]
-        prev_ori = prev_state[3:6]
-        curr_pos = current_state[:3]
-        curr_ori = current_state[3:6]
-        
-        # Position error (negative distance to goal)
-        pos_error_prev = -np.linalg.norm(prev_pos - self.goal_pos)
-        pos_error_curr = -np.linalg.norm(curr_pos - self.goal_pos)
-        
-        # Orientation error
-        ori_error_prev = -np.linalg.norm(prev_ori - self.goal_ori)
-        ori_error_curr = -np.linalg.norm(curr_ori - self.goal_ori)
-        
-        # Reward is improvement in position and orientation
-        pos_reward = (pos_error_curr - pos_error_prev) * 10  # Scale factor
-        ori_reward = (ori_error_curr - ori_error_prev) * 5   # Scale factor
-        
-        # Penalize excessive velocity and angular rates
-        vel_penalty = -0.1 * np.linalg.norm(current_state[6:9])
-        ang_rate_penalty = -0.1 * np.linalg.norm(current_state[9:12])
-        
-        # Penalize excessive control effort
-        control_penalty = -0.05 * np.linalg.norm(self.prev_action)
-        
-        # Sum all reward components
-        reward = pos_reward + ori_reward + vel_penalty + ang_rate_penalty + control_penalty
-        
-        # Bonus for reaching goal
-        if np.linalg.norm(curr_pos - self.goal_pos) < 0.5 and np.linalg.norm(curr_ori - self.goal_ori) < 0.2:
-            reward += 100
             
-        return reward
+    # def calculate_reward(self, prev_state, current_state):
+    #     """Calculate reward based on state transition"""
+    #     # Extract position and orientation from states
+    #     prev_pos = prev_state[:3]
+    #     prev_ori = prev_state[3:6]
+    #     curr_pos = current_state[:3]
+    #     curr_ori = current_state[3:6]
         
-    def is_done(self, state):
-        """Check if episode is complete"""
-        # Extract position and orientation
-        position = state[:3]
-        orientation = state[3:6]
+    #     # Position error (negative distance to goal)
+    #     pos_error_prev = -np.linalg.norm(prev_pos - self.goal_pos)
+    #     pos_error_curr = -np.linalg.norm(curr_pos - self.goal_pos)
         
-        # Check if goal reached
-        pos_error = np.linalg.norm(position - self.goal_pos)
-        ori_error = np.linalg.norm(orientation - self.goal_ori)
+    #     # Orientation error
+    #     ori_error_prev = -np.linalg.norm(prev_ori - self.goal_ori)
+    #     ori_error_curr = -np.linalg.norm(curr_ori - self.goal_ori)
         
-        # Episode complete if goal reached
-        return pos_error < 0.5 and ori_error < 0.2
+    #     # Reward is improvement in position and orientation
+    #     pos_reward = (pos_error_curr - pos_error_prev) * 10  # Scale factor
+    #     ori_reward = (ori_error_curr - ori_error_prev) * 5   # Scale factor
+        
+    #     # Penalize excessive velocity and angular rates
+    #     vel_penalty = -0.1 * np.linalg.norm(current_state[6:9])
+    #     ang_rate_penalty = -0.1 * np.linalg.norm(current_state[9:12])
+        
+    #     # Penalize excessive control effort
+    #     control_penalty = -0.05 * np.linalg.norm(self.prev_action)
+        
+    #     # Sum all reward components
+    #     reward = pos_reward + ori_reward + vel_penalty + ang_rate_penalty + control_penalty
+        
+    #     # Bonus for reaching goal
+    #     if np.linalg.norm(curr_pos - self.goal_pos) < 0.5 and np.linalg.norm(curr_ori - self.goal_ori) < 0.2:
+    #         reward += 100
+            
+    #     return reward
+        
+    # def is_done(self, state):
+    #     """Check if episode is complete"""
+    #     # Extract position and orientation
+    #     position = state[:3]
+    #     orientation = state[3:6]
+        
+    #     # Check if goal reached
+    #     pos_error = np.linalg.norm(position - self.goal_pos)
+    #     ori_error = np.linalg.norm(orientation - self.goal_ori)
+        
+    #     # Episode complete if goal reached
+    #     return pos_error < 0.5 and ori_error < 0.2
     
-    def publish_action(self, action):
-        """Publish actions to thruster and servo topics"""
-        # Distribute the action vector to appropriate actuators
-        # action[0-3] are thrusters, action[4-5] are servo angles
+    # def publish_action(self, action):
+    #     """Publish actions to thruster and servo topics"""
+    #     # Distribute the action vector to appropriate actuators
+    #     # action[0-3] are thrusters, action[4-5] are servo angles
         
-        # Create message objects
-        heave_bow_msg = Float64()
-        heave_bow_msg.data = float(action[0])
+    #     # Create message objects
+    #     heave_bow_msg = Float64()
+    #     heave_bow_msg.data = float(action[0])
         
-        heave_stern_msg = Float64()
-        heave_stern_msg.data = float(action[1])
+    #     heave_stern_msg = Float64()
+    #     heave_stern_msg.data = float(action[1])
         
-        surge_port_msg = Float64()
-        surge_port_msg.data = float(action[2])
+    #     surge_port_msg = Float64()
+    #     surge_port_msg.data = float(action[2])
         
-        surge_starboard_msg = Float64()
-        surge_starboard_msg.data = float(action[3])
+    #     surge_starboard_msg = Float64()
+    #     surge_starboard_msg.data = float(action[3])
         
-        port_servo_msg = Float64()
-        port_servo_msg.data = float(action[4])
+    #     port_servo_msg = Float64()
+    #     port_servo_msg.data = float(action[4])
         
-        starboard_servo_msg = Float64()
-        starboard_servo_msg.data = float(action[5])
+    #     starboard_servo_msg = Float64()
+    #     starboard_servo_msg.data = float(action[5])
         
-        # Publish thruster commands
-        self.thruster_pubs['heave_bow'].publish(heave_bow_msg)
-        self.thruster_pubs['heave_stern'].publish(heave_stern_msg)
-        self.thruster_pubs['surge_port'].publish(surge_port_msg)
-        self.thruster_pubs['surge_starboard'].publish(surge_starboard_msg)
+    #     # Publish thruster commands
+    #     self.thruster_pubs['heave_bow'].publish(heave_bow_msg)
+    #     self.thruster_pubs['heave_stern'].publish(heave_stern_msg)
+    #     self.thruster_pubs['surge_port'].publish(surge_port_msg)
+    #     self.thruster_pubs['surge_starboard'].publish(surge_starboard_msg)
         
-        # Publish servo angle commands
-        self.thruster_pubs['port_servo'].publish(port_servo_msg)
-        self.thruster_pubs['starboard_servo'].publish(starboard_servo_msg)
+    #     # Publish servo angle commands
+    #     self.thruster_pubs['port_servo'].publish(port_servo_msg)
+    #     self.thruster_pubs['starboard_servo'].publish(starboard_servo_msg)
         
-        # Log action if debugging
-        self.get_logger().debug(f"Action: Thrusters={action[:4]}, Servos={action[4:]}")
+    #     # Log action if debugging
+    #     self.get_logger().debug(f"Action: Thrusters={action[:4]}, Servos={action[4:]}")
 
 def main(args=None):
     rclpy.init(args=args)
