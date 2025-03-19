@@ -26,7 +26,7 @@ with open(config_path, 'r') as f:
 
 class OUActionNoise:
     """Ornstein-Uhlenbeck process for exploration noise"""
-    def __init__(self, mean, std_deviation, theta=0.2, dt=1e-2, x_initial=None):
+    def __init__(self, mean, std_deviation, theta=0.15, dt=1e-2, x_initial=None):
         self.theta = theta
         self.mean = mean
         self.std_dev = std_deviation
@@ -274,10 +274,10 @@ class DDPG_ROS2(Node):
         self.config = config
 
         # Define separate dimensions for actor and critic
-        self.actor_state_dim = 12  # Example: position_err, v_err, orientation_err
-        self.critic_state_dim = 18  # More comprehensive state for critic
+        self.actor_state_dim = 12    # Example: position_err, v_err, orientation_err
+        self.critic_state_dim = 18  # error states + commands
         self.action_dim = 6  # 4 thrusters + 2 servo angles
-        self.action_bound = 0.6  # All commands between -1 and 1
+        self.action_bound = 0.7  # All commands between -1 and 1
         
         # Create DDPG agent with separate state dimensions
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -726,7 +726,7 @@ class DDPG_ROS2(Node):
         
         # Safety constraints
         # Max depth limit (assuming negative z is deeper)
-        max_depth = 10.0  # meters, adjust as needed
+        max_depth = 1.0  # meters, adjust as needed
         depth_exceeded = self.position_state[2] < -max_depth
         
         # Max orientation error limits

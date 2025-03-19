@@ -52,7 +52,7 @@ environment:
     3: [1, 1]
 
 reward_function:
-  w1: 2.0              # Weight for performance error
+  w1: 20.0              # Weight for performance error
   w2: 0.0             # Weight for servo smoothness penalty
   w3: 0.0              # Weight for thruster usage penalty (keep zero)
   w4: 1.0              # Weight for thruster smoothness penalty
