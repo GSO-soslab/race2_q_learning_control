@@ -52,10 +52,10 @@ environment:
     3: [1, 1]
 
 reward_function:
-  w1: 1.0              # Weight for performance error
+  w1: 2.0              # Weight for performance error
   w2: 0.0             # Weight for servo smoothness penalty
   w3: 0.0              # Weight for thruster usage penalty (keep zero)
-  w4: 0.0              # Weight for thruster smoothness penalty
+  w4: 1.0              # Weight for thruster smoothness penalty
   w5: 0.0              # Weight for servo angle penalty (keep zero)
   w6: 0.0              # Weight for thruster delta reward
   w7: 0.0              # Weight for action delta reward
@@ -67,13 +67,13 @@ reward_function:
   state_error_weights: [
       # 0.0,  # x
       # 0.0,  # y
-      2.0,  # z
-      5.0,  # surge
+      5.0,  # z
+      10.0,  # surge
       1.0,  # sway
       # 0.0,  # heave
       2.0,  # roll
       2.0,  # pitch
-      50.0  # yaw
+      5.0  # yaw
       # 0.0,  # angular_vel_x
       # 0.0,  # angular_vel_y
       # 0.0   # angular_vel_z

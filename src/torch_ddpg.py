@@ -47,29 +47,44 @@ class OUActionNoise:
         self.x_prev = self.x_initial if self.x_initial is not None else np.zeros_like(self.mean)
 
 class ReplayBuffer:
-    """Experience replay buffer"""
-    def __init__(self, buffer_capacity=10000, batch_size=64):
+    """Experience replay buffer with separate states for actor and critic"""
+    def __init__(self, actor_state_dim, critic_state_dim, buffer_capacity=10000, batch_size=64):
         self.buffer_capacity = buffer_capacity
         self.batch_size = batch_size
         self.buffer = deque(maxlen=buffer_capacity)
+        self.actor_state_dim = actor_state_dim
+        self.critic_state_dim = critic_state_dim
     
-    def add(self, state, action, reward, next_state, done):
-        self.buffer.append((state, action, reward, next_state, done))
+    def add(self, actor_state, critic_state, action, reward, next_actor_state, next_critic_state, done):
+        """Add experience to buffer"""
+        self.buffer.append((actor_state, critic_state, action, reward, next_actor_state, next_critic_state, done))
     
     def sample(self):
+        """Sample a batch of experiences with separate state arrays"""
         batch = random.sample(self.buffer, self.batch_size)
-        states, actions, rewards, next_states, dones = map(np.array, zip(*batch))
+        
+        # Separate the experiences
+        actor_states = np.array([experience[0] for experience in batch])
+        critic_states = np.array([experience[1] for experience in batch])
+        actions = np.array([experience[2] for experience in batch])
+        rewards = np.array([experience[3] for experience in batch])
+        next_actor_states = np.array([experience[4] for experience in batch])
+        next_critic_states = np.array([experience[5] for experience in batch])
+        dones = np.array([experience[6] for experience in batch])
         
         # Convert to PyTorch tensors
-        states = torch.FloatTensor(states)
+        actor_states = torch.FloatTensor(actor_states)
+        critic_states = torch.FloatTensor(critic_states)
         actions = torch.FloatTensor(actions)
         rewards = torch.FloatTensor(rewards).unsqueeze(1)
-        next_states = torch.FloatTensor(next_states)
+        next_actor_states = torch.FloatTensor(next_actor_states)
+        next_critic_states = torch.FloatTensor(next_critic_states)
         dones = torch.FloatTensor(dones).unsqueeze(1)
         
-        return states, actions, rewards, next_states, dones
+        return actor_states, critic_states, actions, rewards, next_actor_states, next_critic_states, dones
     
     def size(self):
+        """Return the current size of the buffer"""
         return len(self.buffer)
 
 class Actor(nn.Module):
@@ -130,27 +145,28 @@ class Critic(nn.Module):
 
 class DDPG:
     """DDPG Agent for AUV control using PyTorch"""
-    def __init__(self, state_dim, action_dim, action_bound, device="cuda" if torch.cuda.is_available() else "cpu"):
-        self.state_dim = state_dim
+    def __init__(self, actor_state_dim, critic_state_dim, action_dim, action_bound, device="cuda" if torch.cuda.is_available() else "cpu"):
+        self.actor_state_dim = actor_state_dim
+        self.critic_state_dim = critic_state_dim
         self.action_dim = action_dim
         self.action_bound = action_bound
         self.device = device
         
-        # Initialize actor and critic networks
-        self.actor = Actor(state_dim, action_dim, action_bound).to(device)
-        self.actor_target = Actor(state_dim, action_dim, action_bound).to(device)
+        # Initialize actor and critic networks with separate state dimensions
+        self.actor = Actor(actor_state_dim, action_dim, action_bound).to(device)
+        self.actor_target = Actor(actor_state_dim, action_dim, action_bound).to(device)
         self.actor_target.load_state_dict(self.actor.state_dict())
         
-        self.critic = Critic(state_dim, action_dim).to(device)
-        self.critic_target = Critic(state_dim, action_dim).to(device)
+        self.critic = Critic(critic_state_dim, action_dim).to(device)
+        self.critic_target = Critic(critic_state_dim, action_dim).to(device)
         self.critic_target.load_state_dict(self.critic.state_dict())
         
         # Initialize optimizers
         self.actor_optimizer = optim.AdamW(self.actor.parameters(), lr=0.001)
         self.critic_optimizer = optim.AdamW(self.critic.parameters(), lr=0.001)
         
-        # Initialize replay buffer
-        self.buffer = ReplayBuffer()
+        # Initialize replay buffer (modified to store both actor and critic states)
+        self.buffer = ReplayBuffer(actor_state_dim, critic_state_dim)
         
         # Initialize noise process
         self.noise = OUActionNoise(
@@ -162,9 +178,9 @@ class DDPG:
         self.gamma = 0.99  # Discount factor
         self.tau = 0.001   # Target network update rate
         
-    def get_action(self, state, add_noise=True):
-        """Return action for given state"""
-        state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+    def get_action(self, actor_state, add_noise=True):
+        """Return action for given actor state"""
+        state_tensor = torch.FloatTensor(actor_state).unsqueeze(0).to(self.device)
         self.actor.eval()
         with torch.no_grad():
             action = self.actor(state_tensor).cpu().numpy()[0]
@@ -176,9 +192,9 @@ class DDPG:
         
         return action
     
-    def remember(self, state, action, reward, next_state, done):
-        """Store experience in replay buffer"""
-        self.buffer.add(state, action, reward, next_state, done)
+    def remember(self, actor_state, critic_state, action, reward, next_actor_state, next_critic_state, done):
+        """Store experience in replay buffer with separate states for actor and critic"""
+        self.buffer.add(actor_state, critic_state, action, reward, next_actor_state, next_critic_state, done)
     
     def learn(self):
         """Update actor and critic networks from replay buffer"""
@@ -186,20 +202,24 @@ class DDPG:
             return None, None
         
         # Sample a batch from replay buffer
-        states, actions, rewards, next_states, dones = self.buffer.sample()
-        states = states.to(self.device)
+        actor_states, critic_states, actions, rewards, next_actor_states, next_critic_states, dones = self.buffer.sample()
+        
+        # Move tensors to device
+        actor_states = actor_states.to(self.device)
+        critic_states = critic_states.to(self.device)
         actions = actions.to(self.device)
         rewards = rewards.to(self.device)
-        next_states = next_states.to(self.device)
+        next_actor_states = next_actor_states.to(self.device)
+        next_critic_states = next_critic_states.to(self.device)
         dones = dones.to(self.device)
         
         # Update critic
         with torch.no_grad():
-            next_actions = self.actor_target(next_states)
-            next_q_values = self.critic_target(next_states, next_actions)
+            next_actions = self.actor_target(next_actor_states)
+            next_q_values = self.critic_target(next_critic_states, next_actions)
             target_q = rewards + self.gamma * next_q_values * (1 - dones)
         
-        current_q = self.critic(states, actions)
+        current_q = self.critic(critic_states, actions)
         critic_loss = nn.MSELoss()(current_q, target_q)
         
         self.critic_optimizer.zero_grad()
@@ -207,8 +227,8 @@ class DDPG:
         self.critic_optimizer.step()
         
         # Update actor using deterministic policy gradient
-        actions_pred = self.actor(states)
-        actor_loss = -self.critic(states, actions_pred).mean()
+        actions_pred = self.actor(actor_states)
+        actor_loss = -self.critic(critic_states, actions_pred).mean()
         
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
@@ -253,16 +273,18 @@ class DDPG_ROS2(Node):
         
         self.config = config
 
-        # Define dimensions
-        self.state_dim = 18  # 3D position + 3D orientation + 3D velocity + 3D angular rate
+        # Define separate dimensions for actor and critic
+        self.actor_state_dim = 12  # Example: position_err, v_err, orientation_err
+        self.critic_state_dim = 18  # More comprehensive state for critic
         self.action_dim = 6  # 4 thrusters + 2 servo angles
         self.action_bound = 0.6  # All commands between -1 and 1
         
-        # Create DDPG agent
+        # Create DDPG agent with separate state dimensions
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.get_logger().info(f"Using device: {self.device}")
-        self.agent = DDPG(self.state_dim, self.action_dim, self.action_bound, self.device)
+        self.agent = DDPG(self.actor_state_dim, self.critic_state_dim, self.action_dim, self.action_bound, self.device)
         
+        # Rest of the initialization code remains the same
         # ROS2 publishers for each actuator
         self.thruster_pubs = {
             'heave_bow': self.create_publisher(Float64, '/race2_auv/control/thruster/heave_bow', 1),
@@ -289,34 +311,34 @@ class DDPG_ROS2(Node):
                                 10)
 
         self.create_subscription(Float64, 
-                                 '/race2_auv/control/surge_port_servo', 
-                                 self.update_joint_port, 
-                                 10)
+                                '/race2_auv/control/surge_port_servo', 
+                                self.update_joint_port, 
+                                10)
         
         self.create_subscription(Float64, 
-                                 '/race2_auv/control/surge_starboard_servo', 
-                                 self.update_joint_starboard, 
-                                 10)
-                                 
+                                '/race2_auv/control/surge_starboard_servo', 
+                                self.update_joint_starboard, 
+                                10)
+                                
         self.create_subscription(Float64, 
-                                 '/race2_auv/control/thruster/heave_bow', 
-                                 self.update_thrust_heave_bow, 
-                                 10)
+                                '/race2_auv/control/thruster/heave_bow', 
+                                self.update_thrust_heave_bow, 
+                                10)
         
         self.create_subscription(Float64, 
-                                 '/race2_auv/control/thruster/surge_port', 
-                                 self.update_thrust_surge_port, 
-                                 10)
+                                '/race2_auv/control/thruster/surge_port', 
+                                self.update_thrust_surge_port, 
+                                10)
         
         self.create_subscription(Float64, 
-                                 '/race2_auv/control/thruster/surge_starboard', 
-                                 self.update_thrust_surge_starboard, 
-                                 10)
+                                '/race2_auv/control/thruster/surge_starboard', 
+                                self.update_thrust_surge_starboard, 
+                                10)
         
         self.create_subscription(Float64, 
-                                 '/race2_auv/control/thruster/sway_stern', 
-                                 self.update_thrust_sway_stern, 
-                                 10)
+                                '/race2_auv/control/thruster/sway_stern', 
+                                self.update_thrust_sway_stern, 
+                                10)
         
         # Training parameters
         self.declare_parameter('training_mode', True)
@@ -331,8 +353,10 @@ class DDPG_ROS2(Node):
         model_path = self.get_parameter('model_path').value
         
         # State tracking
-        self.current_state = None
-        self.prev_state = None
+        self.current_actor_state = None
+        self.current_critic_state = None
+        self.prev_actor_state = None
+        self.prev_critic_state = None
         self.prev_action = None
         
         # Initialize state variables
@@ -388,7 +412,7 @@ class DDPG_ROS2(Node):
         self.episode_reward = 0
         
         # Create timer for control loop
-        self.timer = self.create_timer(0.01, self.control_loop)  # 5 Hz control loop
+        self.timer = self.create_timer(0.01, self.control_loop)  # 100 Hz control loop
         
     def state_callback(self, data):
         """Process state updates from sensors"""
@@ -407,36 +431,6 @@ class DDPG_ROS2(Node):
         
         # Calculate errors
         # self.update_errors()
-
-    # def update_errors(self):
-    #     """Calculate errors between current state and setpoint"""
-    #     if hasattr(self, 'current_state') and hasattr(self, 'current_setpoint'):
-    #         # Calculate vector error for RL state representation
-    #         self.state_err = self.current_setpoint - self.current_state
-            
-    #         # Normalize orientation error components (last 3 elements) to [-pi, pi]
-    #         for i in range(3, 6):  # Indices for orientation components
-    #             self.state_err[i] = ((self.state_err[i] + np.pi) % (2 * np.pi)) - np.pi
-            
-    #         # Also calculate individual component errors for debugging/logging
-    #         self.position_err = self.position_setpoint - self.position_state
-    #         self.v_err = self.v_setpoint - self.v_state
-            
-    #         # Handle orientation errors with angle wrapping
-    #         self.orientation_err = self.orientation_setpoint - self.orientation_state
-    #         self.orientation_err = np.array([
-    #             ((angle + np.pi) % (2 * np.pi)) - np.pi 
-    #             for angle in self.orientation_err
-    #         ])
-            
-    #         self.omega_ref_err = self.omega_ref_setpoint - self.omega_ref_state
-
-    #                 # Update current state for RL agent
-    #     self.state_err = np.concatenate([
-    #             self.position_err[2:3],
-    #             self.v_err[:2],
-    #             self.orientation_err[:3],
-    #     ])
 
     def setpoint_callback(self, data):
         """Process setpoint updates"""
@@ -621,50 +615,60 @@ class DDPG_ROS2(Node):
         return reward
 
     def control_loop(self):
-        """Main control loop using state errors as network input"""
-        # # Only proceed if we have received both state and setpoint
-        # if not (self.current_state and self.current_setpoint):
-        #     self.get_logger().info("Waiting for state and setpoint data...")
-        #     return
+        """Main control loop using separate state inputs for actor and critic"""
+        # Create separate states for actor and critic
+        actor_state = np.concatenate([
+            self.position_err[2:3],     # Depth error
+            self.v_err[:2],             # Surge and sway errors
+            self.orientation_err[:3],   # roll, pitch, yaw errors
+            self.position_state[2:3],   # Current depth
+            self.v_state[:2],           # Current velocities
+            self.orientation_state[:3]  # Current orientation
+        ])
         
-        state = np.concatenate(
-            [self.position_err[2:3],     # Depth
-            self.v_err[:2],             # Surge and sway
-            self.orientation_err[:3],   # roll, pitch, yaw
-            # self.omega_ref_err[2:3],
-            self.position_state[2:3],
-            self.v_state[:2],
-            self.orientation_state[:3],
-            # self.omega_ref_state[2:3],
-            # self.position_setpoint[2:3],
-            # self.v_setpoint[:2],
-            # self.orientation_setpoint[:3],
-            self.joint_angles,
-            np.array([self.thrust_heave_bow,      # Thrust components
-                    self.thrust_surge_port,
-                    self.thrust_surge_starboard,
-                    self.thrust_sway_stern])
+        critic_state = np.concatenate([
+            self.position_err[2:3],     # Depth error
+            self.v_err[:2],             # Surge and sway errors
+            self.orientation_err[:3],   # roll, pitch, yaw errors
+            self.position_state[2:3],   # Current depth
+            self.v_state[:2],           # Current velocities
+            self.orientation_state[:3], # Current orientation
+            self.joint_angles,          # Current servo angles
+            np.array([                  # Current thrust values
+                self.thrust_heave_bow,
+                self.thrust_surge_port,
+                self.thrust_surge_starboard,
+                self.thrust_sway_stern
             ])
+        ])
         
-        # Get action from agent based on state errors
-        action = self.agent.get_action(state, add_noise=self.training_mode)
+        # Get action from agent based on actor state only
+        action = self.agent.get_action(actor_state, add_noise=self.training_mode)
         
         # Publish thruster and servo commands
         self.publish_action(action)
         
         # If in training mode, generate reward and train
-        if self.training_mode and self.prev_state is not None and self.prev_action is not None:
-            reward = self.calculate_reward(self.prev_state, state)
+        if self.training_mode and self.prev_actor_state is not None and self.prev_critic_state is not None and self.prev_action is not None:
+            reward = self.calculate_reward(self.prev_critic_state, critic_state)
             
             # Ensure reward is a scalar value
             if isinstance(reward, np.ndarray):
                 reward = float(reward.item())
                 
             self.episode_reward += reward
-            done = self.is_done(state)  # Changed from self.state_err to state
+            done = self.is_done(critic_state)
             
-            # Store in replay buffer
-            self.agent.remember(self.prev_state, self.prev_action, reward, state, done)
+            # Store in replay buffer with separate states
+            self.agent.remember(
+                self.prev_actor_state, 
+                self.prev_critic_state, 
+                self.prev_action, 
+                reward, 
+                actor_state, 
+                critic_state, 
+                done
+            )
             
             # Train agent
             critic_loss, actor_loss = self.agent.learn()
@@ -696,7 +700,8 @@ class DDPG_ROS2(Node):
                     self.get_logger().info(f"Final model saved to {final_model_path}")
         
         # Store state and action for next training step
-        self.prev_state = state.copy()  # Changed from self.prev_state_err = self.state_err.copy()
+        self.prev_actor_state = actor_state.copy()
+        self.prev_critic_state = critic_state.copy()
         self.prev_action = action
 
     def is_done(self, state):
@@ -752,92 +757,6 @@ class DDPG_ROS2(Node):
                 self.get_logger().warn("Episode terminated: Maximum velocity exceeded")
         
         return done
-    
-    # def calculate_reward(self, prev_state, current_state):
-    #     """Calculate reward based on state transition"""
-    #     # Extract position and orientation from states
-    #     prev_pos = prev_state[:3]
-    #     prev_ori = prev_state[3:6]
-    #     curr_pos = current_state[:3]
-    #     curr_ori = current_state[3:6]
-        
-    #     # Position error (negative distance to goal)
-    #     pos_error_prev = -np.linalg.norm(prev_pos - self.goal_pos)
-    #     pos_error_curr = -np.linalg.norm(curr_pos - self.goal_pos)
-        
-    #     # Orientation error
-    #     ori_error_prev = -np.linalg.norm(prev_ori - self.goal_ori)
-    #     ori_error_curr = -np.linalg.norm(curr_ori - self.goal_ori)
-        
-    #     # Reward is improvement in position and orientation
-    #     pos_reward = (pos_error_curr - pos_error_prev) * 10  # Scale factor
-    #     ori_reward = (ori_error_curr - ori_error_prev) * 5   # Scale factor
-        
-    #     # Penalize excessive velocity and angular rates
-    #     vel_penalty = -0.1 * np.linalg.norm(current_state[6:9])
-    #     ang_rate_penalty = -0.1 * np.linalg.norm(current_state[9:12])
-        
-    #     # Penalize excessive control effort
-    #     control_penalty = -0.05 * np.linalg.norm(self.prev_action)
-        
-    #     # Sum all reward components
-    #     reward = pos_reward + ori_reward + vel_penalty + ang_rate_penalty + control_penalty
-        
-    #     # Bonus for reaching goal
-    #     if np.linalg.norm(curr_pos - self.goal_pos) < 0.5 and np.linalg.norm(curr_ori - self.goal_ori) < 0.2:
-    #         reward += 100
-            
-    #     return reward
-        
-    # def is_done(self, state):
-    #     """Check if episode is complete"""
-    #     # Extract position and orientation
-    #     position = state[:3]
-    #     orientation = state[3:6]
-        
-    #     # Check if goal reached
-    #     pos_error = np.linalg.norm(position - self.goal_pos)
-    #     ori_error = np.linalg.norm(orientation - self.goal_ori)
-        
-    #     # Episode complete if goal reached
-    #     return pos_error < 0.5 and ori_error < 0.2
-    
-    # def publish_action(self, action):
-    #     """Publish actions to thruster and servo topics"""
-    #     # Distribute the action vector to appropriate actuators
-    #     # action[0-3] are thrusters, action[4-5] are servo angles
-        
-    #     # Create message objects
-    #     heave_bow_msg = Float64()
-    #     heave_bow_msg.data = float(action[0])
-        
-    #     heave_stern_msg = Float64()
-    #     heave_stern_msg.data = float(action[1])
-        
-    #     surge_port_msg = Float64()
-    #     surge_port_msg.data = float(action[2])
-        
-    #     surge_starboard_msg = Float64()
-    #     surge_starboard_msg.data = float(action[3])
-        
-    #     port_servo_msg = Float64()
-    #     port_servo_msg.data = float(action[4])
-        
-    #     starboard_servo_msg = Float64()
-    #     starboard_servo_msg.data = float(action[5])
-        
-    #     # Publish thruster commands
-    #     self.thruster_pubs['heave_bow'].publish(heave_bow_msg)
-    #     self.thruster_pubs['heave_stern'].publish(heave_stern_msg)
-    #     self.thruster_pubs['surge_port'].publish(surge_port_msg)
-    #     self.thruster_pubs['surge_starboard'].publish(surge_starboard_msg)
-        
-    #     # Publish servo angle commands
-    #     self.thruster_pubs['port_servo'].publish(port_servo_msg)
-    #     self.thruster_pubs['starboard_servo'].publish(starboard_servo_msg)
-        
-    #     # Log action if debugging
-    #     self.get_logger().debug(f"Action: Thrusters={action[:4]}, Servos={action[4:]}")
 
 def main(args=None):
     rclpy.init(args=args)
