@@ -26,7 +26,7 @@ with open(config_path, 'r') as f:
 
 class OUActionNoise:
     """Ornstein-Uhlenbeck process for exploration noise"""
-    def __init__(self, mean, std_deviation, theta=0.80, dt=1e-2, x_initial=None):
+    def __init__(self, mean, std_deviation, theta=0.5, dt=1e-2, x_initial=None):
         self.theta = theta
         self.mean = mean
         self.std_dev = std_deviation
@@ -88,64 +88,98 @@ class ReplayBuffer:
         return len(self.buffer)
 
 class Actor(nn.Module):
-    """Actor Network for DDPG using PyTorch"""
-    def __init__(self, state_dim, action_dim, action_bound, hidden_dims=[200, 100, 50]):
+    """Actor Network for DDPG using PyTorch, configured from config file"""
+    def __init__(self, state_dim, action_dim, action_bound, config):
+        # Validate config is provided and contains required keys
+        if config is None:
+            raise ValueError("Configuration must be provided for Actor initialization")
+        
+        if 'qnetwork' not in config:
+            raise ValueError("Configuration must contain 'qnetwork' key")
+        
+        if 'actor_hidden_layers' not in config.get('qnetwork', {}):
+            raise ValueError("Configuration must specify 'actor_hidden_layers' in 'qnetwork'")
+        
         super(Actor, self).__init__()
         self.action_bound = action_bound
         
-        # Define network layers
+        hidden_dims = config.get('qnetwork', {}).get('actor_hidden_layers')
+        
+        # Dynamically create layers
         layers = []
-        input_dim = state_dim
+        current_dim = state_dim
         
+        # Create hidden layers dynamically
         for hidden_dim in hidden_dims:
-            layers.append(nn.Linear(input_dim, hidden_dim))
+            layers.append(nn.Linear(current_dim, hidden_dim))
             layers.append(nn.ReLU())
-            input_dim = hidden_dim
-            
-        self.hidden_layers = nn.Sequential(*layers)
-        self.output_layer = nn.Linear(hidden_dims[-1], action_dim)
+            current_dim = hidden_dim
         
+        # Create network
+        self.layers = nn.Sequential(*layers)
+        self.output_layer = nn.Linear(current_dim, action_dim)
+    
     def forward(self, state):
-        x = self.hidden_layers(state)
-        x = torch.tanh(self.output_layer(x))  # tanh activation for [-1, 1] output
+        x = self.layers(state)
+        x = torch.sigmoid(self.output_layer(x))
         return x * self.action_bound
 
 class Critic(nn.Module):
-    """Critic Network for DDPG using PyTorch"""
-    def __init__(self, state_dim, action_dim, hidden_dims=[200, 100, 50]):
+    """Critic Network for DDPG using PyTorch, configured from config file"""
+    def __init__(self, state_dim, action_dim, config):
+        # Validate config is provided and contains required keys
+        if config is None:
+            raise ValueError("Configuration must be provided for Critic initialization")
+        if 'qnetwork' not in config:
+            raise ValueError("Configuration must contain 'qnetwork' key")
+        if 'critic_hidden_layers' not in config.get('qnetwork', {}):
+            raise ValueError("Configuration must specify 'critic_hidden_layers' in 'qnetwork'")
+        
         super(Critic, self).__init__()
+        hidden_dims = config.get('qnetwork', {}).get('critic_hidden_layers')
         
-        # State input processing
-        self.state_layers = nn.Sequential(
-            nn.Linear(state_dim, hidden_dims[0]),
-            nn.ReLU(),
-            nn.Linear(hidden_dims[0], hidden_dims[1]),
-            nn.ReLU()
-        )
+        # Ensure there's at least one hidden layer for state and action
+        if len(hidden_dims) < 1:
+            raise ValueError("Critic must have at least one hidden layer")
         
-        # Action input processing
+        # Separate processing for state and action
+        # Dynamically create state layers
+        state_layers = []
+        current_state_dim = state_dim
+        for hidden_dim in hidden_dims[:2]:  # Up to first two layers for state
+            state_layers.append(nn.Linear(current_state_dim, hidden_dim))
+            state_layers.append(nn.ReLU())
+            current_state_dim = hidden_dim
+        self.state_layers = nn.Sequential(*state_layers)
+        
+        # Action processing layer
         self.action_layer = nn.Sequential(
-            nn.Linear(action_dim, hidden_dims[1]),
+            nn.Linear(action_dim, hidden_dims[1] if len(hidden_dims) > 1 else hidden_dims[0]),
             nn.ReLU()
         )
         
-        # Combined processing
-        self.combined_layers = nn.Sequential(
-            nn.Linear(hidden_dims[1] * 2, hidden_dims[2]),
-            nn.ReLU(),
-            nn.Linear(hidden_dims[2], 1)
-        )
+        # Combined processing layers
+        combined_dim = hidden_dims[1] * 2 if len(hidden_dims) > 1 else sum(hidden_dims)
+        combined_layers = []
+        for hidden_dim in hidden_dims[2:] if len(hidden_dims) > 2 else []:
+            combined_layers.append(nn.Linear(combined_dim, hidden_dim))
+            combined_layers.append(nn.ReLU())
+            combined_dim = hidden_dim
         
+        # Final output layer with Sigmoid activation
+        combined_layers.append(nn.Linear(combined_dim, 1))
+        combined_layers.append(nn.Sigmoid()) 
+        
+        self.combined_layers = nn.Sequential(*combined_layers)
+    
     def forward(self, state, action):
         state_features = self.state_layers(state)
         action_features = self.action_layer(action)
         combined = torch.cat([state_features, action_features], dim=1)
-        q_value = self.combined_layers(combined)
-        return q_value
-
+        return self.combined_layers(combined)
 class DDPG:
     """DDPG Agent for AUV control using PyTorch"""
-    def __init__(self, actor_state_dim, critic_state_dim, action_dim, action_bound, device="cuda" if torch.cuda.is_available() else "cpu"):
+    def __init__(self, actor_state_dim, critic_state_dim, action_dim, action_bound, config , device="cuda" if torch.cuda.is_available() else "cpu"):
         self.actor_state_dim = actor_state_dim
         self.critic_state_dim = critic_state_dim
         self.action_dim = action_dim
@@ -153,12 +187,12 @@ class DDPG:
         self.device = device
         
         # Initialize actor and critic networks with separate state dimensions
-        self.actor = Actor(actor_state_dim, action_dim, action_bound).to(device)
-        self.actor_target = Actor(actor_state_dim, action_dim, action_bound).to(device)
+        self.actor = Actor(actor_state_dim, action_dim, action_bound, config).to(device)
+        self.actor_target = Actor(actor_state_dim, action_dim, action_bound, config).to(device)
         self.actor_target.load_state_dict(self.actor.state_dict())
         
-        self.critic = Critic(critic_state_dim, action_dim).to(device)
-        self.critic_target = Critic(critic_state_dim, action_dim).to(device)
+        self.critic = Critic(critic_state_dim, action_dim, config).to(device)
+        self.critic_target = Critic(critic_state_dim, action_dim, config).to(device)
         self.critic_target.load_state_dict(self.critic.state_dict())
         
         # Initialize optimizers
@@ -176,8 +210,8 @@ class DDPG:
         
         # Hyperparameters
         self.gamma = 0.99  # Discount factor
-        self.tau = 0.001   # Target network update rate
-        
+        self.tau = 0.005  # Target network update rate
+    
     def get_action(self, actor_state, add_noise=True):
         """Return action for given actor state"""
         state_tensor = torch.FloatTensor(actor_state).unsqueeze(0).to(self.device)
@@ -275,15 +309,15 @@ class DDPG_ROS2(Node):
         self.config = config
 
         # Define separate dimensions for actor and critic
-        self.actor_state_dim = 6    # Example: position_err, v_err, orientation_err
-        self.critic_state_dim = 12  # error states + commands
+        self.actor_state_dim = 2    # Example: position_err, v_err, orientation_err
+        self.critic_state_dim = 6  # error states + commands
         self.action_dim = 6  # 4 thrusters + 2 servo angles
-        self.action_bound = 0.5  # All commands between -1 and 1
+        self.action_bound = 1.0  # All commands between -1 and 1
         
         # Create DDPG agent with separate state dimensions
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.get_logger().info(f"Using device: {self.device}")
-        self.agent = DDPG(self.actor_state_dim, self.critic_state_dim, self.action_dim, self.action_bound, self.device)
+        self.agent = DDPG(self.actor_state_dim, self.critic_state_dim, self.action_dim, self.action_bound, config, device=self.device)
 
         # Rest of the initialization code remains the same
         # ROS2 publishers for each actuator
@@ -337,8 +371,8 @@ class DDPG_ROS2(Node):
                                 10)
         
         self.create_subscription(Float64, 
-                                '/race2_auv/control/thruster/sway_stern', 
-                                self.update_thrust_sway_stern, 
+                                '/race2_auv/control/thruster/heave_stern', 
+                                self.update_thrust_heave_stern, 
                                 10)
         
         # Training parameters
@@ -392,7 +426,7 @@ class DDPG_ROS2(Node):
         self.thrust_heave_bow = 0.0
         self.thrust_surge_port = 0.0
         self.thrust_surge_starboard = 0.0
-        self.thrust_sway_stern = 0.0
+        self.thrust_heave_stern = 0.0
 
         # Initialize history arrays for smoothness calculations
         self.joint_positions_history = np.zeros((10, 2))  # Store last 10 servo positions
@@ -413,7 +447,7 @@ class DDPG_ROS2(Node):
         self.episode_reward = 0
         
         # Create timer for control loop
-        self.timer = self.create_timer(0.208, self.control_loop)  # 100 Hz control loop
+        self.timer = self.create_timer(1/5, self.control_loop)  # 100 Hz control loop
         
     def state_callback(self, data):
         """Process state updates from sensors"""
@@ -482,8 +516,8 @@ class DDPG_ROS2(Node):
     def update_thrust_heave_bow(self, data):
         self.thrust_heave_bow = data.data
 
-    def update_thrust_sway_stern(self, data):
-        self.thrust_sway_stern = data.data
+    def update_thrust_heave_stern(self, data):
+        self.thrust_heave_stern = data.data
 
     def convert_servo_command_to_radians(self, normalized_command, min_angle_rad=-0.5, max_angle_rad=0.5):
         """
@@ -559,15 +593,14 @@ class DDPG_ROS2(Node):
              self.v_err[:2], # Surge and sway
              self.orientation_err[:3], # roll, pitch, yaw
             ]).astype(np.float32)
-
         # Compute performance error (quadratic penalty)
         # weighted_errors =  * state_error_weights * error
         # performance_error = np.sum(weighted_errors ** 2)
         error_column = error.reshape(-1, 1)
         performance_error = np.dot(error , np.diag(state_error_weights))
         performance_error = np.dot(performance_error,error_column)
-        performance_error = np.exp(-performance_error)
-        # print("Performance Error", performance_error)
+        # performance_error = np.exp(-performance_error)
+
         # Servo smoothness penalty using sine and cosine components
         servo_smoothness_penalty = 0
         delta_theta = np.zeros(2)
@@ -594,7 +627,7 @@ class DDPG_ROS2(Node):
             self.thrust_heave_bow,
             self.thrust_surge_port,
             self.thrust_surge_starboard,
-            self.thrust_sway_stern
+            self.thrust_heave_stern
         ])
         thruster_usage_penalty = np.sum(np.abs(u_t))
 
@@ -656,29 +689,30 @@ class DDPG_ROS2(Node):
         # Create separate states for actor and critic
         actor_state = np.concatenate([
             self.position_err[2:3],     # Depth error
-            self.v_err[:2],             # Surge and sway errors
-            self.orientation_err[:3],   # roll, pitch, yaw errors
+            # self.v_err[:2],             # Surge and sway errors
+            self.orientation_err[1:2],   # rpitch only
             # self.position_state[2:3],   # Current depth
             # self.v_state[:2],           # Current velocities
             # self.orientation_state[:3]  # Current orientation
         ])
-        
+        print("Actor State", actor_state)
         critic_state = np.concatenate([
             self.position_err[2:3],     # Depth error
-            self.v_err[:2],             # Surge and sway errors
-            self.orientation_err[:3],   # roll, pitch, yaw errors
-            # self.position_state[2:3],   # Current depth
+            # self.v_err[:2],             # Surge and sway errors
+            self.orientation_err[1:2],   # pitch only
+            self.position_state[2:3],   # Current depth
             # self.v_state[:2],           # Current velocities
-            # self.orientation_state[:3], # Current orientation
-            self.joint_angles,          # Current servo angles
+            self.orientation_state[1:2], # Current orientation
+            # self.joint_angles,          # Current servo angles
             np.array([                  # Current thrust values
                 self.thrust_heave_bow,
-                self.thrust_surge_port,
-                self.thrust_surge_starboard,
-                self.thrust_sway_stern
+                # self.thrust_surge_port,
+                # self.thrust_surge_starboard,
+                self.thrust_heave_stern
             ])
         ])
-        
+        print("Critic State", critic_state)
+
         # Get action from agent based on actor state only
         action = self.agent.get_action(actor_state, add_noise=self.training_mode)
         
@@ -696,10 +730,9 @@ class DDPG_ROS2(Node):
             # Ensure reward is a scalar value
             if isinstance(reward, np.ndarray):
                 reward = float(reward.item())
-                
+            print("Reward: ", reward)
             # Add reward to episode total
             self.episode_reward += reward
-            print(self.episode_reward)
             
             # Check if episode is done
             done = self.is_done(critic_state)
@@ -730,7 +763,7 @@ class DDPG_ROS2(Node):
                 self.episode_count += 1
                 
                 # Save model periodically
-                if self.episode_count % 500 == 0:
+                if self.episode_count % 2000 == 0:
                     model_path = f"ddpg_auv_model_ep{self.episode_count}.pt"
                     self.agent.save_weights(model_path)
                     self.get_logger().info(f"Model saved to {model_path}")
@@ -769,11 +802,11 @@ class DDPG_ROS2(Node):
         done = time_limit_exceeded or step_limit_exceeded
 
         # Log the reason for termination
-        if done:
-            if time_limit_exceeded:
-                self.get_logger().info(f"Episode terminated: Time limit exceeded ({elapsed_time:.2f}/{max_time:.2f} seconds)")
-            if step_limit_exceeded:
-                self.get_logger().info(f"Episode terminated: Step count limit exceeded ({self.episode_step}/{max_steps})")
+        # if done:
+        #     if time_limit_exceeded:
+        #         # self.get_logger().info(f"Episode terminated: Time limit exceeded ({elapsed_time:.2f}/{max_time:.2f} seconds)")
+        #     if step_limit_exceeded:
+        #         # self.get_logger().info(f"Episode terminated: Step count limit exceeded ({self.episode_step}/{max_steps})")
                 
         return done
 
