@@ -26,7 +26,7 @@ with open(config_path, 'r') as f:
 
 class OUActionNoise:
     """Ornstein-Uhlenbeck process for exploration noise"""
-    def __init__(self, mean, std_deviation, theta=0.5, dt=1e-2, x_initial=None):
+    def __init__(self, mean, std_deviation, theta=0.15, dt=1e-2, x_initial=None):
         self.theta = theta
         self.mean = mean
         self.std_dev = std_deviation
@@ -48,7 +48,7 @@ class OUActionNoise:
 
 class ReplayBuffer:
     """Experience replay buffer with separate states for actor and critic"""
-    def __init__(self, actor_state_dim, critic_state_dim, buffer_capacity=10000, batch_size=64):
+    def __init__(self, actor_state_dim, critic_state_dim, buffer_capacity=10000, batch_size=32):
         self.buffer_capacity = buffer_capacity
         self.batch_size = batch_size
         self.buffer = deque(maxlen=buffer_capacity)
@@ -121,7 +121,7 @@ class Actor(nn.Module):
     
     def forward(self, state):
         x = self.layers(state)
-        x = torch.sigmoid(self.output_layer(x))
+        x = torch.tanh(self.output_layer(x))
         return x * self.action_bound
 
 class Critic(nn.Module):
@@ -177,6 +177,7 @@ class Critic(nn.Module):
         action_features = self.action_layer(action)
         combined = torch.cat([state_features, action_features], dim=1)
         return self.combined_layers(combined)
+
 class DDPG:
     """DDPG Agent for AUV control using PyTorch"""
     def __init__(self, actor_state_dim, critic_state_dim, action_dim, action_bound, config , device="cuda" if torch.cuda.is_available() else "cpu"):
@@ -196,8 +197,8 @@ class DDPG:
         self.critic_target.load_state_dict(self.critic.state_dict())
         
         # Initialize optimizers
-        self.actor_optimizer = optim.AdamW(self.actor.parameters(), lr=0.001)
-        self.critic_optimizer = optim.AdamW(self.critic.parameters(), lr=0.001)
+        self.actor_optimizer = optim.AdamW(self.actor.parameters(), lr=0.008)
+        self.critic_optimizer = optim.AdamW(self.critic.parameters(), lr=0.008)
         
         # Initialize replay buffer (modified to store both actor and critic states)
         self.buffer = ReplayBuffer(actor_state_dim, critic_state_dim)
@@ -210,7 +211,7 @@ class DDPG:
         
         # Hyperparameters
         self.gamma = 0.99  # Discount factor
-        self.tau = 0.005  # Target network update rate
+        self.tau = 0.008  # Target network update rate (0.01 for depth only)
     
     def get_action(self, actor_state, add_noise=True):
         """Return action for given actor state"""
@@ -309,8 +310,8 @@ class DDPG_ROS2(Node):
         self.config = config
 
         # Define separate dimensions for actor and critic
-        self.actor_state_dim = 2    # Example: position_err, v_err, orientation_err
-        self.critic_state_dim = 6  # error states + commands
+        self.actor_state_dim = 5   # Example: position_err, v_err, orientation_err
+        self.critic_state_dim =15  # error states + commands
         self.action_dim = 6  # 4 thrusters + 2 servo angles
         self.action_bound = 1.0  # All commands between -1 and 1
         
@@ -380,7 +381,7 @@ class DDPG_ROS2(Node):
         self.declare_parameter('max_steps', 700)
         self.declare_parameter('model_path', '')
         
-        self.declare_parameter('max_episodes', 30000)  # Default 1000 episodes
+        self.declare_parameter('max_episodes', 4000)  # Default 1000 episodes
         self.max_episodes = self.get_parameter('max_episodes').value
 
         self.training_mode = self.get_parameter('training_mode').value
@@ -557,24 +558,35 @@ class DDPG_ROS2(Node):
         self.joint_angles = servo_angles_rad
         
         # Map to appropriate publishers
+        #All DOFs
+        thruster_mapping = [
+            ('heave_bow', thruster_cmds[0]),
+            ('surge_port', thruster_cmds[1]),
+            ('surge_starboard', thruster_cmds[2]),
+            ('heave_stern', thruster_cmds[3]),
+            ('port_servo', servo_angles_rad[0]),
+            ('starboard_servo', servo_angles_rad[1])
+        ]
+
+        ## Only depth
+        # thruster_mapping = [
+        #     ('heave_bow', thruster_cmds[0]),
+        #     ('surge_port', 0),
+        #     ('surge_starboard', 0),
+        #     ('heave_stern', thruster_cmds[3]),
+        #     ('port_servo', 0),
+        #     ('starboard_servo', 0)
+        # ]
+
+        # Depth and heading
         # thruster_mapping = [
         #     ('heave_bow', thruster_cmds[0]),
         #     ('surge_port', thruster_cmds[1]),
         #     ('surge_starboard', thruster_cmds[2]),
         #     ('heave_stern', thruster_cmds[3]),
-        #     ('port_servo', servo_angles_rad[0]),
-        #     ('starboard_servo', servo_angles_rad[1])
+        #     ('port_servo', 0),
+        #     ('starboard_servo', 0)
         # ]
-
-        thruster_mapping = [
-            ('heave_bow', thruster_cmds[0]),
-            ('surge_port', 0),
-            ('surge_starboard', 0),
-            ('heave_stern', thruster_cmds[3]),
-            ('port_servo', 0),
-            ('starboard_servo', 0)
-        ]
-
 
         # Publish commands
         for name, value in thruster_mapping:
@@ -688,30 +700,28 @@ class DDPG_ROS2(Node):
         """Main control loop using separate state inputs for actor and critic"""
         # Create separate states for actor and critic
         actor_state = np.concatenate([
-            self.position_err[2:3],     # Depth error
+            # self.position_err[2:3],     # Depth error
             # self.v_err[:2],             # Surge and sway errors
-            self.orientation_err[1:2],   # rpitch only
-            # self.position_state[2:3],   # Current depth
-            # self.v_state[:2],           # Current velocities
-            # self.orientation_state[:3]  # Current orientation
+            # self.orientation_err[:3],   # pitch only
+            self.position_state[2:3],   # Current depth
+            self.v_state[2:3],           # Heave velocity
+            self.orientation_state[:3]  # Current orientations
         ])
-        print("Actor State", actor_state)
         critic_state = np.concatenate([
             self.position_err[2:3],     # Depth error
             # self.v_err[:2],             # Surge and sway errors
-            self.orientation_err[1:2],   # pitch only
+            self.orientation_err[:3],   # roll, pitch, yaw
             self.position_state[2:3],   # Current depth
-            # self.v_state[:2],           # Current velocities
-            self.orientation_state[1:2], # Current orientation
-            # self.joint_angles,          # Current servo angles
+            self.v_state[2:3],           # Current velocities
+            self.orientation_state[:3], # Current orientations
+            self.joint_angles,          # Current servo angles
             np.array([                  # Current thrust values
                 self.thrust_heave_bow,
-                # self.thrust_surge_port,
-                # self.thrust_surge_starboard,
+                self.thrust_surge_port,
+                self.thrust_surge_starboard,
                 self.thrust_heave_stern
             ])
         ])
-        print("Critic State", critic_state)
 
         # Get action from agent based on actor state only
         action = self.agent.get_action(actor_state, add_noise=self.training_mode)
@@ -763,7 +773,7 @@ class DDPG_ROS2(Node):
                 self.episode_count += 1
                 
                 # Save model periodically
-                if self.episode_count % 2000 == 0:
+                if self.episode_count % 800 == 0:
                     model_path = f"ddpg_auv_model_ep{self.episode_count}.pt"
                     self.agent.save_weights(model_path)
                     self.get_logger().info(f"Model saved to {model_path}")

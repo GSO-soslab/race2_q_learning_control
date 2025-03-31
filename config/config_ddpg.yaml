@@ -36,7 +36,7 @@ environment:
 
 
 reward_function:
-  w1: 1.0              # Weight for performance error
+  w1: 1.0             # Weight for performance error
   w2: 0.0             # Weight for servo smoothness penalty
   w3: 0.0              # Weight for thruster usage penalty (keep zero)
   w4: 0.0              # Weight for thruster smoothness penalty
@@ -51,13 +51,13 @@ reward_function:
   state_error_weights: [
       # 0.0,  # x
       # 0.0,  # y
-      0.8,  # z
+      1.0,  # z
       0.0,  # surge
       0.0,  # sway
       # 0.0,  # heave
-      0.0,  # roll
-      1.0,  # pitch
-      0.0  # yaw
+      8.0,  # roll
+      8.0,  # pitch
+      1.0  # yaw
       # 0.0,  # angular_vel_x
       # 0.0,  # angular_vel_y
       # 0.0   # angular_vel_z
@@ -65,7 +65,7 @@ reward_function:
 
 training:
   max_episodes: 10000    # Maximum episodes for training
-  max_t: 1        # Maximum time per episode in secs
+  max_t: 10        # Maximum time per episode in secs
   target_avg_reward: 20  # Target average reward for early stopping
   plot_interval: 2    # Interval for updating plots during training
   random_seed: 42      # Random seed for reproducibility
