@@ -48,7 +48,7 @@ class OUActionNoise:
 
 class ReplayBuffer:
     """Experience replay buffer with separate states for actor and critic"""
-    def __init__(self, actor_state_dim, critic_state_dim, buffer_capacity=10000, batch_size=32):
+    def __init__(self, actor_state_dim, critic_state_dim, buffer_capacity=10000, batch_size=60):
         self.buffer_capacity = buffer_capacity
         self.batch_size = batch_size
         self.buffer = deque(maxlen=buffer_capacity)
@@ -168,7 +168,7 @@ class Critic(nn.Module):
         
         # Final output layer with Sigmoid activation
         combined_layers.append(nn.Linear(combined_dim, 1))
-        combined_layers.append(nn.Sigmoid()) 
+        combined_layers.append(nn.ReLU()) 
         
         self.combined_layers = nn.Sequential(*combined_layers)
     
@@ -197,8 +197,8 @@ class DDPG:
         self.critic_target.load_state_dict(self.critic.state_dict())
         
         # Initialize optimizers
-        self.actor_optimizer = optim.AdamW(self.actor.parameters(), lr=0.008)
-        self.critic_optimizer = optim.AdamW(self.critic.parameters(), lr=0.008)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=0.01)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=0.01)
         
         # Initialize replay buffer (modified to store both actor and critic states)
         self.buffer = ReplayBuffer(actor_state_dim, critic_state_dim)
@@ -211,7 +211,7 @@ class DDPG:
         
         # Hyperparameters
         self.gamma = 0.99  # Discount factor
-        self.tau = 0.008  # Target network update rate (0.01 for depth only)
+        self.tau = 0.02  # Target network update rate (0.01 for depth only)
     
     def get_action(self, actor_state, add_noise=True):
         """Return action for given actor state"""
@@ -310,8 +310,8 @@ class DDPG_ROS2(Node):
         self.config = config
 
         # Define separate dimensions for actor and critic
-        self.actor_state_dim = 5   # Example: position_err, v_err, orientation_err
-        self.critic_state_dim =15  # error states + commands
+        self.actor_state_dim = 3   # Example: position_err, v_err, orientation_err
+        self.critic_state_dim =11  # error states + commands
         self.action_dim = 6  # 4 thrusters + 2 servo angles
         self.action_bound = 1.0  # All commands between -1 and 1
         
@@ -448,7 +448,7 @@ class DDPG_ROS2(Node):
         self.episode_reward = 0
         
         # Create timer for control loop
-        self.timer = self.create_timer(1/5, self.control_loop)  # 100 Hz control loop
+        self.timer = self.create_timer(1/20, self.control_loop)  # 100 Hz control loop
         
     def state_callback(self, data):
         """Process state updates from sensors"""
@@ -560,10 +560,10 @@ class DDPG_ROS2(Node):
         # Map to appropriate publishers
         #All DOFs
         thruster_mapping = [
-            ('heave_bow', thruster_cmds[0]),
-            ('surge_port', thruster_cmds[1]),
-            ('surge_starboard', thruster_cmds[2]),
+            ('heave_bow', thruster_cmds[2]),
             ('heave_stern', thruster_cmds[3]),
+            ('surge_port', thruster_cmds[0]),
+            ('surge_starboard', thruster_cmds[1]),
             ('port_servo', servo_angles_rad[0]),
             ('starboard_servo', servo_angles_rad[1])
         ]
@@ -705,15 +705,15 @@ class DDPG_ROS2(Node):
             # self.orientation_err[:3],   # pitch only
             self.position_state[2:3],   # Current depth
             self.v_state[2:3],           # Heave velocity
-            self.orientation_state[:3]  # Current orientations
+            self.orientation_state[2:3]  # Current orientations
         ])
         critic_state = np.concatenate([
             self.position_err[2:3],     # Depth error
             # self.v_err[:2],             # Surge and sway errors
-            self.orientation_err[:3],   # roll, pitch, yaw
+            self.orientation_err[2:3],   # roll, pitch, yaw
             self.position_state[2:3],   # Current depth
             self.v_state[2:3],           # Current velocities
-            self.orientation_state[:3], # Current orientations
+            self.orientation_state[2:3], # Current orientations
             self.joint_angles,          # Current servo angles
             np.array([                  # Current thrust values
                 self.thrust_heave_bow,

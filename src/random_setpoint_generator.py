@@ -35,7 +35,7 @@ class CustomSetPointPublisher(Node):
         self.stable_angular_rate = Vector3(x=0.0, y=0.0, z=0.0)
         
         # Random ranges for fields we want to vary
-        self.pos_z_min, self.pos_z_max = 5.0, 5.5
+        self.pos_z_min, self.pos_z_max = 2.0, 3.0
         self.ori_z_min, self.ori_z_max = -0.5, 0.5
         self.vel_x_min, self.vel_x_max = -0.28, 0.28
 
