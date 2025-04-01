@@ -48,7 +48,7 @@ class OUActionNoise:
 
 class ReplayBuffer:
     """Experience replay buffer with separate states for actor and critic"""
-    def __init__(self, actor_state_dim, critic_state_dim, buffer_capacity=10000, batch_size=60):
+    def __init__(self, actor_state_dim, critic_state_dim, buffer_capacity=100000, batch_size=32):
         self.buffer_capacity = buffer_capacity
         self.batch_size = batch_size
         self.buffer = deque(maxlen=buffer_capacity)
@@ -197,8 +197,8 @@ class DDPG:
         self.critic_target.load_state_dict(self.critic.state_dict())
         
         # Initialize optimizers
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=0.01)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=0.01)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=0.0002)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=0.0008)
         
         # Initialize replay buffer (modified to store both actor and critic states)
         self.buffer = ReplayBuffer(actor_state_dim, critic_state_dim)
@@ -211,7 +211,7 @@ class DDPG:
         
         # Hyperparameters
         self.gamma = 0.99  # Discount factor
-        self.tau = 0.02  # Target network update rate (0.01 for depth only)
+        self.tau = 0.006  # Target network update rate (0.01 for depth only)
     
     def get_action(self, actor_state, add_noise=True):
         """Return action for given actor state"""
@@ -310,8 +310,8 @@ class DDPG_ROS2(Node):
         self.config = config
 
         # Define separate dimensions for actor and critic
-        self.actor_state_dim = 3   # Example: position_err, v_err, orientation_err
-        self.critic_state_dim =11  # error states + commands
+        self.actor_state_dim = 8   # Example: position_err, v_err, orientation_err
+        self.critic_state_dim =10  # error states + commands
         self.action_dim = 6  # 4 thrusters + 2 servo angles
         self.action_bound = 1.0  # All commands between -1 and 1
         
@@ -381,7 +381,7 @@ class DDPG_ROS2(Node):
         self.declare_parameter('max_steps', 700)
         self.declare_parameter('model_path', '')
         
-        self.declare_parameter('max_episodes', 4000)  # Default 1000 episodes
+        self.declare_parameter('max_episodes', 8000)  # Default 1000 episodes
         self.max_episodes = self.get_parameter('max_episodes').value
 
         self.training_mode = self.get_parameter('training_mode').value
@@ -492,6 +492,7 @@ class DDPG_ROS2(Node):
         self.position_err[2:3],
         self.v_err[:2],
         self.orientation_err[:3],
+        self.omega_ref_err[:3],
         ])
 
         # Update errors after setpoint changes
@@ -611,7 +612,7 @@ class DDPG_ROS2(Node):
         error_column = error.reshape(-1, 1)
         performance_error = np.dot(error , np.diag(state_error_weights))
         performance_error = np.dot(performance_error,error_column)
-        # performance_error = np.exp(-performance_error)
+        performance_error = np.exp(-performance_error)
 
         # Servo smoothness penalty using sine and cosine components
         servo_smoothness_penalty = 0
@@ -676,7 +677,7 @@ class DDPG_ROS2(Node):
 
         # Total reward
         reward =   -(
-            w1 * performance_error +
+            -w1 * performance_error +
             w2 * servo_smoothness_penalty +
             w3 * thruster_usage_penalty +
             w4 * thruster_smoothness_penalty +
@@ -705,15 +706,18 @@ class DDPG_ROS2(Node):
             # self.orientation_err[:3],   # pitch only
             self.position_state[2:3],   # Current depth
             self.v_state[2:3],           # Heave velocity
-            self.orientation_state[2:3]  # Current orientations
+            self.orientation_state[:3],  # Current orientations
+            self.omega_ref_state[:3]
         ])
         critic_state = np.concatenate([
             self.position_err[2:3],     # Depth error
             # self.v_err[:2],             # Surge and sway errors
-            self.orientation_err[2:3],   # roll, pitch, yaw
-            self.position_state[2:3],   # Current depth
-            self.v_state[2:3],           # Current velocities
-            self.orientation_state[2:3], # Current orientations
+            self.orientation_err[:3],   # roll, pitch, yaw
+            # self.omega_ref_err[:3],
+            # self.position_state[2:3],   # Current depth
+            # self.v_state[2:3],           # Current velocities
+            # self.orientation_state[:3], # Current orientations
+            # self.omega_ref_state[:3],
             self.joint_angles,          # Current servo angles
             np.array([                  # Current thrust values
                 self.thrust_heave_bow,
