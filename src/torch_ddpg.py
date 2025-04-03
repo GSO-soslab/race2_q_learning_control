@@ -26,7 +26,7 @@ with open(config_path, 'r') as f:
 
 class OUActionNoise:
     """Ornstein-Uhlenbeck process for exploration noise"""
-    def __init__(self, mean, std_deviation, theta=0.15, dt=1e-2, x_initial=None):
+    def __init__(self, mean, std_deviation, theta=0.05, dt=1e-2, x_initial=None):
         self.theta = theta
         self.mean = mean
         self.std_dev = std_deviation
@@ -48,7 +48,7 @@ class OUActionNoise:
 
 class ReplayBuffer:
     """Experience replay buffer with separate states for actor and critic"""
-    def __init__(self, actor_state_dim, critic_state_dim, buffer_capacity=100000, batch_size=32):
+    def __init__(self, actor_state_dim, critic_state_dim, buffer_capacity=200000, batch_size=128):
         self.buffer_capacity = buffer_capacity
         self.batch_size = batch_size
         self.buffer = deque(maxlen=buffer_capacity)
@@ -197,8 +197,8 @@ class DDPG:
         self.critic_target.load_state_dict(self.critic.state_dict())
         
         # Initialize optimizers
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=0.0002)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=0.0008)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=0.0005)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=0.001)
         
         # Initialize replay buffer (modified to store both actor and critic states)
         self.buffer = ReplayBuffer(actor_state_dim, critic_state_dim)
@@ -211,7 +211,7 @@ class DDPG:
         
         # Hyperparameters
         self.gamma = 0.99  # Discount factor
-        self.tau = 0.006  # Target network update rate (0.01 for depth only)
+        self.tau = 0.001  # Target network update rate (0.01 for depth only)
     
     def get_action(self, actor_state, add_noise=True):
         """Return action for given actor state"""
@@ -310,8 +310,8 @@ class DDPG_ROS2(Node):
         self.config = config
 
         # Define separate dimensions for actor and critic
-        self.actor_state_dim = 8   # Example: position_err, v_err, orientation_err
-        self.critic_state_dim =10  # error states + commands
+        self.actor_state_dim = 14   # Example: position_err, v_err, orientation_err
+        self.critic_state_dim =20  # error states + commands
         self.action_dim = 6  # 4 thrusters + 2 servo angles
         self.action_bound = 1.0  # All commands between -1 and 1
         
@@ -378,7 +378,7 @@ class DDPG_ROS2(Node):
         
         # Training parameters
         self.declare_parameter('training_mode', True)
-        self.declare_parameter('max_steps', 700)
+        self.declare_parameter('max_steps', 1000)
         self.declare_parameter('model_path', '')
         
         self.declare_parameter('max_episodes', 8000)  # Default 1000 episodes
@@ -563,8 +563,8 @@ class DDPG_ROS2(Node):
         thruster_mapping = [
             ('heave_bow', thruster_cmds[2]),
             ('heave_stern', thruster_cmds[3]),
-            ('surge_port', thruster_cmds[0]),
-            ('surge_starboard', thruster_cmds[1]),
+            ('surge_port', 0.9 * thruster_cmds[0]),
+            ('surge_starboard', 0.9 * thruster_cmds[1]),
             ('port_servo', servo_angles_rad[0]),
             ('starboard_servo', servo_angles_rad[1])
         ]
@@ -607,12 +607,12 @@ class DDPG_ROS2(Node):
              self.orientation_err[:3], # roll, pitch, yaw
             ]).astype(np.float32)
         # Compute performance error (quadratic penalty)
-        # weighted_errors =  * state_error_weights * error
-        # performance_error = np.sum(weighted_errors ** 2)
-        error_column = error.reshape(-1, 1)
-        performance_error = np.dot(error , np.diag(state_error_weights))
-        performance_error = np.dot(performance_error,error_column)
-        performance_error = np.exp(-performance_error)
+        weighted_errors =  state_error_weights * error
+        performance_error = np.sum(weighted_errors ** 2)
+        # error_column = error.reshape(-1, 1)
+        # performance_error = np.dot(error , np.diag(state_error_weights))
+        # performance_error = np.dot(performance_error,error_column)
+        # performance_error = np.exp(-performance_error)
 
         # Servo smoothness penalty using sine and cosine components
         servo_smoothness_penalty = 0
@@ -677,7 +677,7 @@ class DDPG_ROS2(Node):
 
         # Total reward
         reward =   -(
-            -w1 * performance_error +
+            w1 * performance_error +
             w2 * servo_smoothness_penalty +
             w3 * thruster_usage_penalty +
             w4 * thruster_smoothness_penalty +
@@ -701,22 +701,22 @@ class DDPG_ROS2(Node):
         """Main control loop using separate state inputs for actor and critic"""
         # Create separate states for actor and critic
         actor_state = np.concatenate([
-            # self.position_err[2:3],     # Depth error
-            # self.v_err[:2],             # Surge and sway errors
-            # self.orientation_err[:3],   # pitch only
+            self.position_err[2:3],     # Depth error
+            self.v_err[:3],             # Surge and sway errors
+            self.orientation_err[:3],   # roll, pitch, yaw
             self.position_state[2:3],   # Current depth
-            self.v_state[2:3],           # Heave velocity
+            self.v_state[:3],           # Heave velocity
             self.orientation_state[:3],  # Current orientations
-            self.omega_ref_state[:3]
+            # self.omega_ref_state[:3]
         ])
         critic_state = np.concatenate([
             self.position_err[2:3],     # Depth error
-            # self.v_err[:2],             # Surge and sway errors
+            self.v_err[:3],             # Surge and sway errors
             self.orientation_err[:3],   # roll, pitch, yaw
             # self.omega_ref_err[:3],
-            # self.position_state[2:3],   # Current depth
-            # self.v_state[2:3],           # Current velocities
-            # self.orientation_state[:3], # Current orientations
+            self.position_state[2:3],   # Current depth
+            self.v_state[:3],           # Current velocities
+            self.orientation_state[:3], # Current orientations
             # self.omega_ref_state[:3],
             self.joint_angles,          # Current servo angles
             np.array([                  # Current thrust values
@@ -783,13 +783,22 @@ class DDPG_ROS2(Node):
                     self.get_logger().info(f"Model saved to {model_path}")
                 
                 # Check if we've reached the maximum number of episodes
+                # if self.episode_count >= self.max_episodes:
+                #     self.get_logger().info(f"Reached maximum number of episodes ({self.max_episodes}). Training complete.")
+                #     self.training_mode = False  # Stop training mode
+                #     final_model_path = "ddpg_auv_model_final.pt"
+                #     self.agent.save_weights(final_model_path)
+                #     self.get_logger().info(f"Final model saved to {final_model_path}")
+                
                 if self.episode_count >= self.max_episodes:
                     self.get_logger().info(f"Reached maximum number of episodes ({self.max_episodes}). Training complete.")
-                    self.training_mode = False  # Stop training mode
                     final_model_path = "ddpg_auv_model_final.pt"
                     self.agent.save_weights(final_model_path)
                     self.get_logger().info(f"Final model saved to {final_model_path}")
-                
+                    # Load the saved model back for inference
+                    self.agent.load_weights(final_model_path)
+                    self.training_mode = False  # Stop training mode
+
                 # Reset episode reward AFTER logging it
                 self.episode_reward = 0
                 # Reset episode start time for the next episode
