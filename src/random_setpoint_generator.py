@@ -19,7 +19,7 @@ class CustomSetPointPublisher(Node):
         )
         
         # Declare parameters with default values
-        self.declare_parameter('random_duration', 200)
+        self.declare_parameter('random_duration', 50)
         self.declare_parameter('rate_hz', 2.0)
         
         # Parameters
@@ -36,7 +36,7 @@ class CustomSetPointPublisher(Node):
         
         # Random ranges for fields we want to vary
         self.pos_z_min, self.pos_z_max = 2.0, 3.0
-        self.ori_z_min, self.ori_z_max = -0.5, 0.5
+        self.ori_z_min, self.ori_z_max = -1.57, 1.57
         self.vel_x_min, self.vel_x_max = -0.28, 0.28
 
     def biased_random(prev_value, min_val, max_val, bias_factor=0.5):

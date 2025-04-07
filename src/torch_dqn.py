@@ -326,7 +326,7 @@ class GridWorldEnv(Node):  # Inherit from Node
         self.thrust_heave_bow = 0.0
         self.thrust_surge_port = 0.0
         self.thrust_surge_starboard = 0.0
-        self.thrust_sway_stern = 0.0
+        self.thrust_heave_stern = 0.0
         self._episode_ended = False
         self.max_episode_duration = config['environment']['max_episode_duration']
         self.thruster_history_length = config['environment']['thruster_history_length']
@@ -424,8 +424,8 @@ class GridWorldEnv(Node):  # Inherit from Node
                                  10)
         
         self.create_subscription(Float64, 
-                                 '/race2_auv/control/thruster/sway_stern', 
-                                 self.update_thrust_sway_stern, 
+                                 '/race2_auv/control/thruster/heave_stern', 
+                                 self.update_thrust_heave_stern, 
                                  10)
         # Reset the environment
         self.reset()
@@ -578,8 +578,8 @@ class GridWorldEnv(Node):  # Inherit from Node
     def update_thrust_heave_bow(self, data):
         self.thrust_heave_bow = data.data
 
-    def update_thrust_sway_stern(self, data):
-        self.thrust_sway_stern = data.data
+    def update_thrust_heave_stern(self, data):
+        self.thrust_heave_stern = data.data
     
     def step(self, action_index):
         if not self.use_policy:
@@ -601,7 +601,7 @@ class GridWorldEnv(Node):  # Inherit from Node
                  np.array([self.thrust_heave_bow,  # Thrust components
                         self.thrust_surge_port,
                         self.thrust_surge_starboard,
-                        self.thrust_sway_stern])
+                        self.thrust_heave_stern])
                 ])
             
             normalized_state = self.scaler.update_and_normalize(step_state)
@@ -664,7 +664,7 @@ class GridWorldEnv(Node):  # Inherit from Node
                  np.array([self.thrust_heave_bow,  # Thrust components
                         self.thrust_surge_port,
                         self.thrust_surge_starboard,
-                        self.thrust_sway_stern])
+                        self.thrust_heave_stern])
                 ])
         
         # Normalize state with adaptive scaler
@@ -711,7 +711,7 @@ class GridWorldEnv(Node):  # Inherit from Node
                  np.array([self.thrust_heave_bow,  # Thrust components
                         self.thrust_surge_port,
                         self.thrust_surge_starboard,
-                        self.thrust_sway_stern])
+                        self.thrust_heave_stern])
                 ])
         
         normalized_initial_state = self.scaler.update_and_normalize(initial_state)
@@ -784,7 +784,7 @@ class GridWorldEnv(Node):  # Inherit from Node
             self.thrust_heave_bow,
             self.thrust_surge_port,
             self.thrust_surge_starboard,
-            self.thrust_sway_stern
+            self.thrust_heave_stern
         ])
         thruster_usage_penalty = np.sum(np.abs(u_t))
 
@@ -950,7 +950,7 @@ def continuous_learning(env, agent, config):
             if loss is not None:
                 episode_loss += loss
                 loss_steps += 1
-            time.sleep(0.02)
+            time.sleep(0.21)
             if done:
                 break
 

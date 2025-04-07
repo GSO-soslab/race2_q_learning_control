@@ -1,9 +1,9 @@
 # Draft Configuration file for the DDPG agent and environment
-min_servo_angle_rad: -1.57
-max_servo_angle_rad: 1.57 
+min_servo_angle_rad: -0.785
+max_servo_angle_rad: 0.785 
 
 qnetwork:
-  actor_hidden_layers: [600, 400, 300]  
+  actor_hidden_layers: [600 ,400, 300] 
   critic_hidden_layers: [600, 400, 300] 
 
 
@@ -51,13 +51,13 @@ reward_function:
   state_error_weights: [
       # 0.0,  # x
       # 0.0,  # y
-      5.0,  # z
-      1.0,  # surge
-      0.0,  # sway
+      2.0,  # z
+      5.0,  # surge
+      1.0,  # sway
       # 0.0,  # heave
       1.0,  # roll
       1.0,  # pitch
-      0.7  # yaw
+      1.0  # yaw
       # 0.0,  # angular_vel_x
       # 0.0,  # angular_vel_y
       # 0.0   # angular_vel_z
@@ -65,7 +65,7 @@ reward_function:
 
 training:
   max_episodes: 10000    # Maximum episodes for training
-  max_t: 50        # Maximum time per episode in secs
+  max_t: 15        # Maximum time per episode in secs
   target_avg_reward: 20  # Target average reward for early stopping
   plot_interval: 2    # Interval for updating plots during training
   random_seed: 42      # Random seed for reproducibility
@@ -79,4 +79,3 @@ plotting:
 
 others:
   random_seed: 42      # General random seed for reproducibility
-

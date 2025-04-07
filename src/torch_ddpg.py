@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os,time
+import os,time, datetime
 import rclpy
 from rclpy.node import Node
 import numpy as np
@@ -9,14 +9,10 @@ import torch.optim as optim
 import random
 import yaml
 from collections import deque
-from std_msgs.msg import Header, Float64
-from geometry_msgs.msg import Vector3, TwistStamped
+from std_msgs.msg import Float64
+from geometry_msgs.msg import TwistStamped
 from mvp_msgs.msg import ControlProcess
 from sensor_msgs.msg import Imu
-
-
-from geometry_msgs.msg import Pose, Twist
-
 
 # Set the path to the config file in the parent config directory
 config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config_ddpg.yaml')
@@ -26,30 +22,46 @@ with open(config_path, 'r') as f:
     config = yaml.safe_load(f)
 
 class OUActionNoise:
-    """Ornstein-Uhlenbeck process for exploration noise"""
-    def __init__(self, mean, std_deviation, theta=0.05, dt=1e-2, x_initial=None):
+    def __init__(self, mean, std_deviation, theta=0.15, dt=1e-2, x0=None, decay_period=100000):
         self.theta = theta
         self.mean = mean
         self.std_dev = std_deviation
         self.dt = dt
-        self.x_initial = x_initial
+        self.x0 = x0
         self.reset()
         
+        # Noise annealing parameters
+        self.initial_std = std_deviation.copy()
+        self.min_std = 0.05 * std_deviation  # Minimum noise level (5% of initial)
+        self.decay_period = decay_period  # Steps over which to decay noise
+        self.step_count = 0
+        
     def __call__(self):
-        x = (
-            self.x_prev
-            + self.theta * (self.mean - self.x_prev) * self.dt
-            + self.std_dev * np.sqrt(self.dt) * np.random.normal(size=self.mean.shape)
-        )
+        # Update internal state
+        x = self.x_prev + self.theta * (self.mean - self.x_prev) * self.dt + \
+            self.std_dev * np.sqrt(self.dt) * np.random.normal(size=self.mean.shape)
+        
+        # Store x for next call
         self.x_prev = x
         return x
-    
+        
     def reset(self):
-        self.x_prev = self.x_initial if self.x_initial is not None else np.zeros_like(self.mean)
+        if self.x0 is not None:
+            self.x_prev = self.x0
+        else:
+            self.x_prev = np.zeros_like(self.mean)
+            
+    def update_std(self):
+        """Update standard deviation based on annealing schedule"""
+        self.step_count += 1
+        if self.step_count <= self.decay_period:
+            # Linear decay
+            decay_factor = 1.0 - (self.step_count / self.decay_period) * (1.0 - self.min_std / self.initial_std)
+            self.std_dev = self.initial_std * decay_factor
 
 class ReplayBuffer:
     """Experience replay buffer with separate states for actor and critic"""
-    def __init__(self, actor_state_dim, critic_state_dim, buffer_capacity=200000, batch_size=128):
+    def __init__(self, actor_state_dim, critic_state_dim, buffer_capacity=20000, batch_size=64):
         self.buffer_capacity = buffer_capacity
         self.batch_size = batch_size
         self.buffer = deque(maxlen=buffer_capacity)
@@ -166,10 +178,10 @@ class Critic(nn.Module):
             combined_layers.append(nn.Linear(combined_dim, hidden_dim))
             combined_layers.append(nn.ReLU())
             combined_dim = hidden_dim
-        
+
         # Final output layer with Sigmoid activation
         combined_layers.append(nn.Linear(combined_dim, 1))
-        combined_layers.append(nn.ReLU()) 
+        # combined_layers.append(nn.Sigmoid()) 
         
         self.combined_layers = nn.Sequential(*combined_layers)
     
@@ -198,8 +210,8 @@ class DDPG:
         self.critic_target.load_state_dict(self.critic.state_dict())
         
         # Initialize optimizers
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=0.005)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=0.01)
+        self.actor_optimizer = optim.AdamW(self.actor.parameters(), lr=1e-4)
+        self.critic_optimizer = optim.AdamW(self.critic.parameters(), lr=1e-4)
         
         # Initialize replay buffer (modified to store both actor and critic states)
         self.buffer = ReplayBuffer(actor_state_dim, critic_state_dim)
@@ -212,20 +224,26 @@ class DDPG:
         
         # Hyperparameters
         self.gamma = 0.99  # Discount factor
-        self.tau = 0.01  # Target network update rate (0.01 for depth only)
+        self.tau = 0.0009 # Target network update rate (0.01 for depth only)
     
-    def get_action(self, actor_state, add_noise=True):
-        """Return action for given actor state"""
-        state_tensor = torch.FloatTensor(actor_state).unsqueeze(0).to(self.device)
-        self.actor.eval()
+    def get_action(self, state, add_noise=True):
+        """Get action from actor with optional noise for exploration"""
+        state = torch.FloatTensor(state).to(self.device)
+        self.actor.eval()  # Set to evaluation mode
+        
         with torch.no_grad():
-            action = self.actor(state_tensor).cpu().numpy()[0]
-        self.actor.train()
+            action = self.actor(state).cpu().numpy()
+        
+        self.actor.train()  # Back to training mode
         
         if add_noise:
+            # Update noise standard deviation before adding noise
+            self.noise.update_std()
             noise = self.noise()
             action = np.clip(action + noise, -self.action_bound, self.action_bound)
-        
+        else:
+            action = np.clip(action, -self.action_bound, self.action_bound)
+            
         return action
     
     def remember(self, actor_state, critic_state, action, reward, next_actor_state, next_critic_state, done):
@@ -311,8 +329,8 @@ class DDPG_ROS2(Node):
         self.config = config
 
         # Define separate dimensions for actor and critic
-        self.actor_state_dim = 21   # Example: position_err, v_err, orientation_err
-        self.critic_state_dim =27  # error states + commands
+        self.actor_state_dim = 10   # Example: position_err, v_err, orientation_err
+        self.critic_state_dim = 16  # error states + commands
         self.action_dim = 6  # 4 thrusters + 2 servo angles
         self.action_bound = 1.0  # All commands between -1 and 1
         
@@ -391,10 +409,10 @@ class DDPG_ROS2(Node):
         
         # Training parameters
         self.declare_parameter('training_mode', True)
-        self.declare_parameter('max_steps', 1000)
+        self.declare_parameter('max_steps', 500)
         self.declare_parameter('model_path', '')
         
-        self.declare_parameter('max_episodes', 8000)  # Default 1000 episodes
+        self.declare_parameter('max_episodes', 500)  # Default 1000 episodes
         self.max_episodes = self.get_parameter('max_episodes').value
 
         self.training_mode = self.get_parameter('training_mode').value
@@ -472,7 +490,7 @@ class DDPG_ROS2(Node):
         self.episode_reward = 0
         
         # Create timer for control loop
-        self.timer = self.create_timer(1/20, self.control_loop)  # 100 Hz control loop
+        self.timer = self.create_timer(1/10, self.control_loop)  # 100 Hz control loop
         
 
     def imu_callback(self, msg):
@@ -528,7 +546,6 @@ class DDPG_ROS2(Node):
             self.velocity_error   # et
         ])
         
-        # Now you can use this state vector for your RL algorithm
         # self.get_logger().info(f"State updated: {state}")
         return state
 
@@ -643,10 +660,10 @@ class DDPG_ROS2(Node):
         # Map to appropriate publishers
         #All DOFs
         thruster_mapping = [
-            ('heave_bow', thruster_cmds[2]),
-            ('heave_stern', thruster_cmds[3]),
-            ('surge_port', 0.9 * thruster_cmds[0]),
-            ('surge_starboard', 0.9 * thruster_cmds[1]),
+            ('heave_bow', 0.8* thruster_cmds[2]),
+            ('heave_stern', 0.8 * thruster_cmds[3]),
+            ('surge_port', 0.4* thruster_cmds[0]),
+            ('surge_starboard', 0.4 *  thruster_cmds[1]),
             ('port_servo', servo_angles_rad[0]),
             ('starboard_servo', servo_angles_rad[1])
         ]
@@ -677,208 +694,249 @@ class DDPG_ROS2(Node):
             msg.data = float(value)
             self.thruster_pubs[name].publish(msg)
 
-    def calculate_reward(self, prev_state, current_state):
-        # Main objective - track velocity setpoint
-        reward_velocity = -np.linalg.norm(self.velocity_error)
-        
-        # Smoothness reward - penalize jerky thruster changes
-        thruster_diff = self.thruster_action - self.thruster_command_action_prev[0]
-        reward_smoothness = -0.2 * np.sum(np.abs(thruster_diff))
-        
-        # Stability reward - penalize excessive angular motion
-        reward_stability = -0.3 * np.linalg.norm(self.angular_vel)
-        
-        # Energy efficiency - penalize high thruster usage
-        reward_energy = -0.1 * np.sum(np.square(self.thruster_action))
-        
-        # Combined reward
-        reward = reward_velocity + reward_smoothness + reward_stability + reward_energy
-        
-        # For debugging
-        self.get_logger().debug(f"Rewards: vel={reward_velocity:.2f}, smooth={reward_smoothness:.2f}, " 
-                            f"stab={reward_stability:.2f}, energy={reward_energy:.2f}, total={reward:.2f}")
-        
-        return reward
-    
     # def calculate_reward(self, prev_state, current_state):
-    #     """Calculate reward based on specified error components"""
-    #     w = self.config['reward_function']
-    #     w1, w2, w3, w4, w5, w6 ,w7, w8 = w['w1'], w['w2'], w['w3'], w['w4'], w['w5'], w['w6'], w['w7'],w['w8']
-    #     state_error_weights = np.array(w['state_error_weights'])
-    #     # Extract specific error components as requested
-    #     error = np.concatenate(
-    #         [self.position_err[2:3], # Depth
-    #          self.v_err[:2], # Surge and sway
-    #          self.orientation_err[:3], # roll, pitch, yaw
-    #         ]).astype(np.float32)
-    #     # Compute performance error (quadratic penalty)
-    #     weighted_errors =  state_error_weights * error
-    #     performance_error = np.sum(weighted_errors ** 2)
-    #     # error_column = error.reshape(-1, 1)
-    #     # performance_error = np.dot(error , np.diag(state_error_weights))
-    #     # performance_error = np.dot(performance_error,error_column)
-    #     # performance_error = np.exp(-performance_error)
-
-    #     # Servo smoothness penalty using sine and cosine components
-    #     servo_smoothness_penalty = 0
-    #     delta_theta = np.zeros(2)
-
-    #     for i in range(2):
-    #         # Compute average sine and cosine of the historical angles
-    #         avg_sin = np.average(np.sin(self.joint_positions_history[:, i]))
-    #         avg_cos = np.average(np.cos(self.joint_positions_history[:, i]))
-    #         historical_avg_angle = np.arctan2(avg_sin, avg_cos)
-
-    #         # Get the current angle from self.joint_angles
-    #         current_angle = self.joint_angles[i]
-
-    #         # Calculate the angular difference
-    #         delta_theta[i] = np.abs(current_angle - historical_avg_angle)
-
-    #     # Accumulate the smoothness penalty
-    #     servo_smoothness_penalty = np.linalg.norm(delta_theta)
-    #     # Update joint_positions_history
-    #     self.joint_positions_history = np.vstack((self.joint_positions_history[1:], self.joint_angles))
-
-    #     # Thruster usage penalty
-    #     u_t = np.array([
-    #         self.thrust_heave_bow,
-    #         self.thrust_surge_port,
-    #         self.thrust_surge_starboard,
-    #         self.thrust_heave_stern
-    #     ])
-    #     thruster_usage_penalty = np.sum(np.abs(u_t))
-
-    #     # # Thruster smoothness penalty
-    #     # if len(self.u_prev) > 0:
-    #     #     thruster_smoothness_penalty = np.linalg.norm(u_t - np.average(self.u_prev, axis=0))
-    #     #     self.u_prev = np.vstack((self.u_prev[1:], u_t))
-
-    #     # Thruster smoothness penalty
-    #     thruster_smoothness_penalty = np.linalg.norm(u_t - np.average(self.u_prev, axis=0))
-
-    #     # Update self.u_prev to store the history
-    #     self.u_prev = np.vstack((self.u_prev[1:], u_t))
-
-    #     # Thruster delta reward
-    #     thruster_delta_reward = np.linalg.norm(u_t - self.u_prev[-2])
-
-    #     # Servo angle penalty
-    #     servo_angle_penalty = np.linalg.norm(self.joint_angles)
-    #     # print("Smoothness penalty:", thruster_smoothness_penalty)
-
-
-    #     # Update thruster_command_action_prev with clear logic
-    #     self.thruster_command_action_prev = np.vstack((
-    #         self.thruster_command_action_prev[1:],  # Keep all except the first
-    #         self.thruster_action  # Add the newest action
-    #     ))
-    #     thruster_action_penalty = np.sum(self.thruster_action - np.average(self.thruster_command_action_prev, axis=0))
-    #     # Debugging output (optional)
-    #     # print("Thruster Action Penalty:", self.thruster_command_action_prev)
-
-    #     # Thruster Direction Change Penalty
-    #     direction_change_penalty = w8 * thruster_action_penalty ** 2  # Quadratic penalty
-
-    #     # Total reward
-    #     reward =   -(
-    #         w1 * performance_error +
-    #         w2 * servo_smoothness_penalty +
-    #         w3 * thruster_usage_penalty +
-    #         w4 * thruster_smoothness_penalty +
-    #         w5 * servo_angle_penalty +
-    #         w6 * thruster_delta_reward +
-    #         w7 * thruster_action_penalty +
-    #         w8 * direction_change_penalty
-    #     )
+    #     # Main objective - track velocity setpoint
+    #     reward_velocity = -np.linalg.norm(self.velocity_error)
         
-    #     # print(f"Performance Error Contribution: {-w1 * performance_error}")
-    #     # print(f"Servo Smoothness Penalty Contribution: {-w2 * servo_smoothness_penalty}")
-    #     # print(f"Thruster Usage Penalty Contribution: {-w3 * thruster_usage_penalty}")
-    #     # print(f"Thruster Smoothness Penalty Contribution: {-w4 * thruster_smoothness_penalty}")
-    #     # print(f"Servo Angle Penalty Contribution: {-w5 * servo_angle_penalty}")
-    #     # print(f"Thruster Delta Reward Contribution: {-w6 * thruster_delta_reward}")
-    #     # print(f"Thruster action penalty: {w7 * thruster_action_penalty}")
-    #     # print(reward)
+    #     # Smoothness reward - penalize jerky thruster changes
+    #     thruster_diff = self.thruster_action - self.thruster_command_action_prev[0]
+    #     reward_smoothness = -0.2 * np.sum(np.abs(thruster_diff))
+        
+    #     # Stability reward - penalize excessive angular motion
+    #     reward_stability = -0.3 * np.linalg.norm(self.angular_vel)
+        
+    #     # Energy efficiency - penalize high thruster usage
+    #     reward_energy = -0.1 * np.sum(np.square(self.thruster_action))
+        
+    #     # Combined reward
+    #     reward = reward_velocity + reward_smoothness + reward_stability + reward_energy
+        
+    #     # For debugging
+    #     self.get_logger().debug(f"Rewards: vel={reward_velocity:.2f}, smooth={reward_smoothness:.2f}, " 
+    #                         f"stab={reward_stability:.2f}, energy={reward_energy:.2f}, total={reward:.2f}")
+        
     #     return reward
+    
+    def calculate_reward(self, prev_state, current_state):
+        """Calculate reward based on specified error components"""
+        w = self.config['reward_function']
+        w1, w2, w3, w4, w5, w6 ,w7, w8 = w['w1'], w['w2'], w['w3'], w['w4'], w['w5'], w['w6'], w['w7'],w['w8']
+        state_error_weights = np.array(w['state_error_weights'])
+        # Extract specific error components as requested
+        error = np.concatenate(
+            [self.position_err[2:3], # Depth
+             self.v_err[:2], # Surge and sway
+             self.orientation_err[:3], # roll, pitch, yaw
+            ]).astype(np.float32)
+        # Compute performance error (quadratic penalty)
+        # weighted_errors =  state_error_weights * error
+        # performance_error = np.sum(weighted_errors ** 2)
+        error_column = error.reshape(-1, 1)
+        performance_error = np.dot(error , np.diag(state_error_weights))
+        performance_error = np.dot(performance_error,error_column)
+        performance_error = np.exp(-performance_error)
+
+        # Servo smoothness penalty using sine and cosine components
+        servo_smoothness_penalty = 0
+        delta_theta = np.zeros(2)
+
+        for i in range(2):
+            # Compute average sine and cosine of the historical angles
+            avg_sin = np.average(np.sin(self.joint_positions_history[:, i]))
+            avg_cos = np.average(np.cos(self.joint_positions_history[:, i]))
+            historical_avg_angle = np.arctan2(avg_sin, avg_cos)
+
+            # Get the current angle from self.joint_angles
+            current_angle = self.joint_angles[i]
+
+            # Calculate the angular difference
+            delta_theta[i] = np.abs(current_angle - historical_avg_angle)
+
+        # Accumulate the smoothness penalty
+        servo_smoothness_penalty = np.linalg.norm(delta_theta)
+        # Update joint_positions_history
+        self.joint_positions_history = np.vstack((self.joint_positions_history[1:], self.joint_angles))
+
+        # Thruster usage penalty
+        u_t = np.array([
+            self.thrust_heave_bow,
+            self.thrust_surge_port,
+            self.thrust_surge_starboard,
+            self.thrust_heave_stern
+        ])
+        thruster_usage_penalty = np.sum(np.abs(u_t))
+
+        # # Thruster smoothness penalty
+        # if len(self.u_prev) > 0:
+        #     thruster_smoothness_penalty = np.linalg.norm(u_t - np.average(self.u_prev, axis=0))
+        #     self.u_prev = np.vstack((self.u_prev[1:], u_t))
+
+        # Thruster smoothness penalty
+        thruster_smoothness_penalty = np.linalg.norm(u_t - np.average(self.u_prev, axis=0))
+
+        # Update self.u_prev to store the history
+        self.u_prev = np.vstack((self.u_prev[1:], u_t))
+
+        # Thruster delta reward
+        thruster_delta_reward = np.linalg.norm(u_t - self.u_prev[-2])
+
+        # Servo angle penalty
+        servo_angle_penalty = np.linalg.norm(self.joint_angles)
+        # print("Smoothness penalty:", thruster_smoothness_penalty)
+
+
+        # Update thruster_command_action_prev with clear logic
+        self.thruster_command_action_prev = np.vstack((
+            self.thruster_command_action_prev[1:],  # Keep all except the first
+            self.thruster_action  # Add the newest action
+        ))
+        thruster_action_penalty = np.sum(self.thruster_action - np.average(self.thruster_command_action_prev, axis=0))
+        # Debugging output (optional)
+        # print("Thruster Action Penalty:", self.thruster_command_action_prev)
+
+        # Thruster Direction Change Penalty
+        direction_change_penalty = w8 * thruster_action_penalty ** 2  # Quadratic penalty
+
+        # Total reward
+        reward =   -(
+            -w1 * performance_error +
+            w2 * servo_smoothness_penalty +
+            w3 * thruster_usage_penalty +
+            w4 * thruster_smoothness_penalty +
+            w5 * servo_angle_penalty +
+            w6 * thruster_delta_reward +
+            w7 * thruster_action_penalty +
+            w8 * direction_change_penalty
+        )
+        
+        # print(f"Performance Error Contribution: {-w1 * performance_error}")
+        # print(f"Servo Smoothness Penalty Contribution: {-w2 * servo_smoothness_penalty}")
+        # print(f"Thruster Usage Penalty Contribution: {-w3 * thruster_usage_penalty}")
+        # print(f"Thruster Smoothness Penalty Contribution: {-w4 * thruster_smoothness_penalty}")
+        # print(f"Servo Angle Penalty Contribution: {-w5 * servo_angle_penalty}")
+        # print(f"Thruster Delta Reward Contribution: {-w6 * thruster_delta_reward}")
+        # print(f"Thruster action penalty: {w7 * thruster_action_penalty}")
+        # print(reward)
+        return reward/30
 
     def control_loop(self):
         """Main control loop using separate state inputs for actor and critic"""
 
-        # Construct state as per paper definition
-        # vt: Linear velocities from DVL
-        linear_vel = self.v_state  # This should be from your DVL
-        # print(linear_vel)
-        # ωt: Angular velocities from IMU
-        angular_vel = self.omega_ref_state  # This should be from your IMU
-        # print(angular_vel)
-        # v̇t: Linear accelerations from IMU
-        linear_accel = self.linear_accel  # Ensure this is populated from IMU data
-        # print(linear_accel)
-        # ω̇t: Angular accelerations (derived from IMU angular velocities)
-        angular_accel = self.angular_accel  # Ensure this is calculated in your IMU callback
-        # print(angular_accel)
-        # ut-1: Previous commands
-        prev_commands = self.prev_action if hasattr(self, 'prev_action') and self.prev_action is not None else np.zeros(self.action_dim)
-        # print(prev_commands)
-        # et: Velocity error
-        velocity_error = self.v_err  # Difference between current and desired velocities
-        # print(velocity_error)
-        # breakpoint()
-        # Create the complete state according to the paper definition
-        complete_state = np.concatenate([
-            linear_vel,      # vt
-            angular_vel,     # ωt
-            linear_accel,    # v̇t
-            angular_accel,   # ω̇t
-            prev_commands,   # ut-1
-            velocity_error   # et
-        ])
-        
-        # For backward compatibility, you can still use actor_state and critic_state
-        # but make them both use the paper-defined state with potentially different components
-        
-        actor_state = complete_state  # Use the complete state for actor
-        
-        # For critic, you might want to add additional information like joint angles and thrust values
-        critic_state = np.concatenate([
-            complete_state,     # Paper-defined state
-            self.joint_angles,  # Current servo angles
-            np.array([          # Current thrust values
-                self.thrust_heave_bow,
-                self.thrust_surge_port,
-                self.thrust_surge_starboard,
-                self.thrust_heave_stern
-            ])
-        ])
-        
-        # # Create separate states for actor and critic
-        # actor_state = np.concatenate([
-        #     self.position_err[2:3],     # Depth error
-        #     self.v_err[:3],             # Surge and sway errors
-        #     self.orientation_err[:3],   # roll, pitch, yaw
-        #     self.position_state[2:3],   # Current depth
-        #     self.v_state[:3],           # Heave velocity
-        #     self.orientation_state[:3],  # Current orientations
-        #     # self.omega_ref_state[:3]
+        # # vt: Linear velocities from DVL
+        # linear_vel = self.v_state 
+        # # print(linear_vel)
+        # # ωt: Angular velocities from IMU
+        # angular_vel = self.omega_ref_state  
+        # # print(angular_vel)
+        # # v̇t: Linear accelerations from IMU
+        # linear_accel = self.linear_accel  # Ensure this is populated from IMU data
+        # # print(linear_accel)
+        # # ω̇t: Angular accelerations (derived from IMU angular velocities)
+        # angular_accel = self.angular_accel  
+        # # print(angular_accel)
+        # # ut-1: Previous commands
+        # prev_commands = self.prev_action if hasattr(self, 'prev_action') and self.prev_action is not None else np.zeros(self.action_dim)
+        # # print(prev_commands)
+        # # et: Velocity error
+        # velocity_error = self.v_err  # Difference between current and desired velocities
+        # # print(velocity_error)
+        # # breakpoint()
+        # # Create the complete state according to the paper definition
+        # complete_state = np.concatenate([
+        #     linear_vel,      # vt
+        #     angular_vel,     # ωt
+        #     linear_accel,    # v̇t
+        #     angular_accel,   # ω̇t
+        #     prev_commands,   # ut-1
+        #     velocity_error   # et
         # ])
+        
+        # actor_state = complete_state  # Use the complete state for actor
+        
         # critic_state = np.concatenate([
-        #     self.position_err[2:3],     # Depth error
-        #     self.v_err[:3],             # Surge and sway errors
-        #     self.orientation_err[:3],   # roll, pitch, yaw
-        #     # self.omega_ref_err[:3],
-        #     self.position_state[2:3],   # Current depth
-        #     self.v_state[:3],           # Current velocities
-        #     self.orientation_state[:3], # Current orientations
-        #     # self.omega_ref_state[:3],
-        #     self.joint_angles,          # Current servo angles
-        #     np.array([                  # Current thrust values
+        #     complete_state,     # Paper-defined state
+        #     self.joint_angles,  # Current servo angles
+        #     np.array([          # Current thrust values
         #         self.thrust_heave_bow,
         #         self.thrust_surge_port,
         #         self.thrust_surge_starboard,
         #         self.thrust_heave_stern
         #     ])
         # ])
+        
+        depth = self.position_state[2:3]
+        surge = self.v_state[0:1]     
+        sway = self.v_state[1:2]      
+        heave = self.v_state[2:3]        
+        roll = self.orientation_state[0:1]         
+        pitch = self.orientation_state[1:2]         
+        yaw = self.orientation_state[2:3]           
+
+        depth_error = self.position_err[2:3]        
+        surge_error = self.v_err[0:1]   
+        sway_error = self.v_err[1:2]       
+        heave_error = self.v_err[2:3]      
+        roll_error = self.orientation_err[0:1]     
+        pitch_error = self.orientation_err[1:2]     
+        yaw_error = self.orientation_err[2:3]    
+
+        roll_rate = self.omega_ref_state[0:1]
+        pitch_rate = self.omega_ref_state[1:2]
+        yaw_rate = self.omega_ref_state[2:3]
+        roll_rate_error = self.omega_ref_err[0:1]
+        pitch_rate_error = self.omega_ref_err[1:2] 
+        yaw_rate_error = self.omega_ref_err[2:3]
+
+        actor_state = np.concatenate([
+            # depth_error,               
+            # surge_velocity_error,    
+            # sway_velocity_error,       
+            # heave_velocity_error,     
+            # roll_error, 
+            # pitch_error, 
+            # yaw_error,  
+            depth/2,                      
+            surge, 
+            sway, 
+            heave,  
+            roll, 
+            pitch, 
+            yaw / np.pi,           
+            roll_rate,
+            pitch_rate,
+            yaw_rate,
+        ])
+
+        # Create critic state by concatenating the components you want
+        critic_state = np.concatenate([
+            depth_error/2,                 
+            surge_error,
+            sway_error, 
+            #heave_error,  
+            roll_error, 
+            pitch_error, 
+            yaw_error, 
+            # roll_rate_error,
+            # pitch_rate_error,
+            # yaw_rate_error,
+            # depth,                      
+            # surge, 
+            # sway, 
+            # heave,  
+            # roll,
+            # pitch,
+            yaw / np.pi,           
+            roll_rate,
+            pitch_rate,
+            yaw_rate,
+            self.joint_angles,           
+            np.array([                  
+                self.thrust_heave_bow,
+                self.thrust_surge_port,
+                self.thrust_surge_starboard,
+                self.thrust_heave_stern
+            ])
+        ])
 
         # Get action from agent based on actor state only
         action = self.agent.get_action(actor_state, add_noise=self.training_mode)
@@ -889,7 +947,9 @@ class DDPG_ROS2(Node):
         # Calculate current time if episode_start_time is not set
         if not hasattr(self, 'episode_start_time') or self.episode_start_time is None:
             self.episode_start_time = time.time()
-        
+
+        done = False
+
         # If in training mode, generate reward and train
         if self.training_mode and self.prev_actor_state is not None and self.prev_critic_state is not None and self.prev_action is not None:
             reward = self.calculate_reward(self.prev_critic_state, critic_state)
@@ -897,7 +957,6 @@ class DDPG_ROS2(Node):
             # Ensure reward is a scalar value
             if isinstance(reward, np.ndarray):
                 reward = float(reward.item())
-            print("Reward: ", reward)
             # Add reward to episode total
             self.episode_reward += reward
             
@@ -920,42 +979,52 @@ class DDPG_ROS2(Node):
             if critic_loss is not None:
                 self.get_logger().debug(f"Critic Loss: {critic_loss:.4f}, Actor Loss: {actor_loss:.4f}")
                 
-            # Update episode step counter
-            self.episode_step += 1
+        elif not self.training_mode:
+            # When in inference mode, still check if episode is done
+            done = self.is_done(critic_state)
             
-            # Check for episode end
-            if done or self.episode_step >= self.max_steps:
-                self.get_logger().info(f"Episode {self.episode_count} completed: Steps={self.episode_step}, Reward={self.episode_reward:.2f}")
-                self.episode_step = self.episode_step
-                self.episode_count += 1
+        # Update episode step counter
+        self.episode_step += 1
+
+        # Check for episode end
+        if done or self.episode_step >= self.max_steps:
+            self.get_logger().info(f"Episode {self.episode_count} completed: Steps={self.episode_step}, Reward={self.episode_reward:.2f}")
+            self.episode_step = 0  # Reset step counter (you had self.episode_step = self.episode_step)
+            self.episode_count += 1
+            
+            # Save model periodically
+            if self.episode_count % 200 == 0:
+                #     model_path = f"ddpg_auv_model_ep{self.episode_count}.pt"
+                #     self.agent.save_weights(model_path)
+                #     self.get_logger().info(f"Model saved to {model_path}")
                 
-                # Save model periodically
-                if self.episode_count % 800 == 0:
-                    model_path = f"ddpg_auv_model_ep{self.episode_count}.pt"
+                    # Create a session ID only once when the program starts
+                    if not hasattr(self, 'session_id'):
+                        self.session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                        # Create the session directory
+                        self.checkpoint_dir = os.path.join("checkpoints", f"session_{self.session_id}")
+                        os.makedirs(self.checkpoint_dir, exist_ok=True)
+                        self.get_logger().info(f"Created checkpoint directory: {self.checkpoint_dir}")
+                    
+                    # Save the model in the session directory with incrementing episode numbers
+                    model_path = os.path.join(self.checkpoint_dir, f"ddpg_auv_model_ep{self.episode_count}.pt")
                     self.agent.save_weights(model_path)
                     self.get_logger().info(f"Model saved to {model_path}")
                 
-                # Check if we've reached the maximum number of episodes
-                # if self.episode_count >= self.max_episodes:
-                #     self.get_logger().info(f"Reached maximum number of episodes ({self.max_episodes}). Training complete.")
-                #     self.training_mode = False  # Stop training mode
-                #     final_model_path = "ddpg_auv_model_final.pt"
-                #     self.agent.save_weights(final_model_path)
-                #     self.get_logger().info(f"Final model saved to {final_model_path}")
-                
-                if self.episode_count >= self.max_episodes:
-                    self.get_logger().info(f"Reached maximum number of episodes ({self.max_episodes}). Training complete.")
-                    final_model_path = "ddpg_auv_model_final.pt"
-                    self.agent.save_weights(final_model_path)
-                    self.get_logger().info(f"Final model saved to {final_model_path}")
-                    # Load the saved model back for inference
-                    self.agent.load_weights(final_model_path)
-                    self.training_mode = False  # Stop training mode
+            if self.episode_count >= self.max_episodes:
+                self.get_logger().info(f"Reached maximum number of episodes ({self.max_episodes}). Training complete.")
+                final_model_path = "ddpg_auv_model_final.pt"
+                self.agent.save_weights(final_model_path)
+                self.get_logger().info(f"Final model saved to {final_model_path}")
+                # Load the saved model back for inference
+                self.agent.load_weights(final_model_path)
+                self.training_mode = False  # Stop training mode
+                self.get_logger().info("Switching to inference mode - controller will continue sending actions")
 
-                # Reset episode reward AFTER logging it
-                self.episode_reward = 0
-                # Reset episode start time for the next episode
-                self.episode_start_time = time.time()
+            # Reset episode reward AFTER logging it
+            self.episode_reward = 0
+            # Reset episode start time for the next episode
+            self.episode_start_time = time.time()
         
         # Store state and action for next training step
         self.prev_actor_state = actor_state.copy()
@@ -975,7 +1044,7 @@ class DDPG_ROS2(Node):
         step_limit_exceeded = self.episode_step >= max_steps
 
         # Episode terminates ONLY if time or step limits are exceeded
-        done = time_limit_exceeded or step_limit_exceeded
+        done = time_limit_exceeded #or step_limit_exceeded
 
         # Log the reason for termination
         # if done:
