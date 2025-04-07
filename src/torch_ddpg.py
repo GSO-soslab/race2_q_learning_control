@@ -22,7 +22,7 @@ with open(config_path, 'r') as f:
     config = yaml.safe_load(f)
 
 class OUActionNoise:
-    def __init__(self, mean, std_deviation, theta=0.15, dt=1e-2, x0=None, decay_period=100000):
+    def __init__(self, mean, std_deviation, theta=0.35, dt=1e-2, x0=None, decay_period=100000):
         self.theta = theta
         self.mean = mean
         self.std_dev = std_deviation
@@ -182,7 +182,8 @@ class Critic(nn.Module):
         # Final output layer with Sigmoid activation
         combined_layers.append(nn.Linear(combined_dim, 1))
         # combined_layers.append(nn.Sigmoid()) 
-        
+        combined_layers.append(nn.Tanh()) 
+
         self.combined_layers = nn.Sequential(*combined_layers)
     
     def forward(self, state, action):
@@ -210,8 +211,8 @@ class DDPG:
         self.critic_target.load_state_dict(self.critic.state_dict())
         
         # Initialize optimizers
-        self.actor_optimizer = optim.AdamW(self.actor.parameters(), lr=1e-4)
-        self.critic_optimizer = optim.AdamW(self.critic.parameters(), lr=1e-4)
+        self.actor_optimizer = optim.AdamW(self.actor.parameters(), lr=1e-5)
+        self.critic_optimizer = optim.AdamW(self.critic.parameters(), lr=1e-5)
         
         # Initialize replay buffer (modified to store both actor and critic states)
         self.buffer = ReplayBuffer(actor_state_dim, critic_state_dim)
@@ -224,7 +225,7 @@ class DDPG:
         
         # Hyperparameters
         self.gamma = 0.99  # Discount factor
-        self.tau = 0.0009 # Target network update rate (0.01 for depth only)
+        self.tau = 0.0005 # Target network update rate (0.01 for depth only)
     
     def get_action(self, state, add_noise=True):
         """Get action from actor with optional noise for exploration"""
