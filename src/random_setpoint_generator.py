@@ -40,10 +40,10 @@ class CustomSetPointPublisher(Node):
         )
         
         # Declare parameters with default values
-        self.declare_parameter('random_duration', 20)
+        self.declare_parameter('random_duration',0.2)
         self.declare_parameter('rate_hz', 10.0)
-        self.declare_parameter('enable_resets', True)
-        self.declare_parameter('reset_interval', 2.0)
+        self.declare_parameter('enable_resets', False)
+        self.declare_parameter('reset_interval',0.1)
         
         # Add exploration parameters
         self.declare_parameter('exploration_factor', 1.0)
@@ -76,7 +76,7 @@ class CustomSetPointPublisher(Node):
         
         # Random ranges for fields we want to vary
         self.pos_z_min, self.pos_z_max = 0.0, 3.0
-        self.ori_z_min, self.ori_z_max = -1.57, 1.57
+        self.ori_z_min, self.ori_z_max = -np.pi, np.pi
         self.vel_x_min, self.vel_x_max = -0.28, 0.28
         
         # Calculate range spans
@@ -85,10 +85,14 @@ class CustomSetPointPublisher(Node):
         self.max_vel_x_range = self.vel_x_max - self.vel_x_min
         
         # Initialize progressive ranges (start smaller)
-        self.pos_z_range = 0.5
-        self.ori_z_range = 0.5
-        self.vel_x_range = 0.1
+        # self.pos_z_range = 0.5
+        # self.ori_z_range = 0.5
+        # self.vel_x_range = 0.1
         
+        self.pos_z_range = 2.0
+        self.ori_z_range = 2 * np.pi
+        self.vel_x_range = 0.6
+
         # Initialize reset tracking
         self.last_reset_time = self.get_clock().now().seconds_nanoseconds()[0]
         self.episode_count = 0
@@ -105,85 +109,72 @@ class CustomSetPointPublisher(Node):
         new_value = random.uniform(min_val, max_val)
         return prev_value + bias_factor * (new_value - prev_value)
     
-    def check_and_perform_reset(self):
-        """Check if it's time for a reset and perform one if needed"""
-        current_time = self.get_clock().now().seconds_nanoseconds()[0]
-        
-        if self.enable_resets and current_time - self.last_reset_time >= self.reset_interval:
-            # Reset to a new random state
-            self.get_logger().info(f'Performing periodic reset #{self.episode_count}')
-            
-            # Reset noise generators
-            self.pos_noise.reset()
-            self.ori_noise.reset()
-            self.vel_noise.reset()
-            
-            # Reset to completely new random values
-            current_position = Vector3(
-                x=random.uniform(-1.0, 1.0),  # Wider range for reset
-                y=random.uniform(-1.0, 1.0), 
-                z=random.uniform(self.pos_z_min, self.pos_z_max)
-            )
-            
-            current_orientation = Vector3(
-                x=self.stable_orientation.x + random.uniform(-0.2, 0.2),
-                y=random.uniform(-0.2, 0.2),
-                z=random.uniform(self.ori_z_min, self.ori_z_max)
-            )
-            
-            current_velocity = Vector3(
-                x=random.uniform(self.vel_x_min, self.vel_x_max),
-                y=random.uniform(-0.1, 0.1),
-                z=random.uniform(-0.1, 0.1)
-            )
-            
-            current_angular_rate = Vector3(
-                x=random.uniform(-0.1, 0.1),
-                y=random.uniform(-0.1, 0.1),
-                z=random.uniform(-0.1, 0.1)
-            )
-            
-            # Publish the reset values
-            msg = ControlProcess()
-            msg.header = Header()
-            msg.header.stamp = self.get_clock().now().to_msg()
-            msg.header.frame_id = self.frame_id_value
-            msg.child_frame_id = self.child_frame_id
-            msg.control_mode = self.control_mode_value
-            msg.position = current_position
-            msg.orientation = current_orientation
-            msg.velocity = current_velocity
-            msg.angular_rate = current_angular_rate
-            
-            # Publish the message
-            self.set_point_pub.publish(msg)
-            
-            # Update reset time
-            self.last_reset_time = self.get_clock().now().seconds_nanoseconds()[0]
-            
-            # Record current values as previous for biased random
-            self.prev_position_z = current_position.z
-            self.prev_orientation_z = current_orientation.z
-            self.prev_velocity_x = current_velocity.x
-            
-            self.episode_count += 1
-            
-            return True
-        
-        return False
-
     def publish_values(self, position, orientation, velocity, angular_rate, duration):
         """Helper function to publish specified values for a given duration."""
         start_time = self.get_clock().now().seconds_nanoseconds()[0]
         end_time = start_time + duration
         
         while self.get_clock().now().seconds_nanoseconds()[0] < end_time:
-            # Check if it's time for a reset
-            if self.check_and_perform_reset():
-                # A reset was performed, so break out of the current publishing loop
-                return
+            current_time = self.get_clock().now().seconds_nanoseconds()[0]
             
-            # Otherwise, continue with normal publishing
+            # Check if it's time for a reset
+            if self.enable_resets and current_time - self.last_reset_time >= self.reset_interval:
+                # It's time for a reset
+                self.get_logger().info(f'Performing periodic reset #{self.episode_count}')
+                
+                # Reset noise generators
+                self.pos_noise.reset()
+                self.ori_noise.reset()
+                self.vel_noise.reset()
+                
+                # Generate reset values
+                reset_position = Vector3(
+                    x=random.uniform(-1.0, 1.0),
+                    y=random.uniform(-1.0, 1.0), 
+                    z=random.uniform(self.pos_z_min, self.pos_z_max)
+                )
+                
+                reset_orientation = Vector3(
+                    x=self.stable_orientation.x + random.uniform(-0.2, 0.2),
+                    y=random.uniform(-0.01, 0.01),
+                    z=random.uniform(self.ori_z_min, self.ori_z_max)
+                )
+                
+                reset_velocity = Vector3(
+                    x=random.uniform(self.vel_x_min, self.vel_x_max),
+                    y=random.uniform(-0.1, 0.1),
+                    z=random.uniform(-0.1, 0.1)
+                )
+                
+                reset_angular_rate = Vector3(
+                    x=random.uniform(-0.1, 0.1),
+                    y=random.uniform(-0.1, 0.1),
+                    z=random.uniform(-0.1, 0.1)
+                )
+                
+                # Publish the reset values
+                reset_msg = ControlProcess()
+                reset_msg.header = Header()
+                reset_msg.header.stamp = self.get_clock().now().to_msg()
+                reset_msg.header.frame_id = self.frame_id_value
+                reset_msg.child_frame_id = self.child_frame_id
+                reset_msg.control_mode = self.control_mode_value
+                reset_msg.position = reset_position
+                reset_msg.orientation = reset_orientation
+                reset_msg.velocity = reset_velocity
+                reset_msg.angular_rate = reset_angular_rate
+                
+                # Publish the reset message
+                self.set_point_pub.publish(reset_msg)
+                
+                # Update reset time
+                self.last_reset_time = current_time
+                self.episode_count += 1
+                
+                # Sleep for a brief moment to ensure the reset value is applied
+                time.sleep(0.1)
+            
+            # Continue publishing the original target values - this runs regardless of whether a reset just happened
             msg = ControlProcess()
             msg.header = Header()
             msg.header.stamp = self.get_clock().now().to_msg()
@@ -219,16 +210,16 @@ class CustomSetPointPublisher(Node):
                                          y=self.stable_angular_rate.y,
                                          z=self.stable_angular_rate.z)
             
-            # Check for a reset first
-            if self.check_and_perform_reset():
-                # A reset was performed, skip to the next iteration
-                continue
+            # # Check for a reset first
+            # if self.check_and_perform_reset():
+            #     # A reset was performed, skip to the next iteration
+            #     continue
             
             # Randomize fields based on current period
             if period_index == 0:
                 # Vary position.z and orientation.z
                 center_z = self.stable_position.z
-                limit_z = min(self.pos_z_range/2, self.max_pos_z_range/2)
+                limit_z = min(self.pos_z_range, self.max_pos_z_range)
                 current_position.z = self.biased_random(
                     self.prev_position_z,
                     center_z - limit_z,
@@ -296,13 +287,13 @@ class CustomSetPointPublisher(Node):
                 current_position.y += pos_noise[1]
                 current_position.z += pos_noise[2]
                 
-                current_orientation.x += ori_noise[0]
-                current_orientation.y += ori_noise[1]
+                # current_orientation.x += ori_noise[0]
+                # current_orientation.y += ori_noise[1]
                 current_orientation.z += ori_noise[2]
                 
                 current_velocity.x += vel_noise[0]
-                current_velocity.y += vel_noise[1]
-                current_velocity.z += vel_noise[2]
+                # current_velocity.y += vel_noise[1]
+                # current_velocity.z += vel_noise[2]
 
             # Publish these values for the duration
             self.publish_values(

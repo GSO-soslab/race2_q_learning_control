@@ -22,7 +22,7 @@ with open(config_path, 'r') as f:
     config = yaml.safe_load(f)
 
 class OUActionNoise:
-    def __init__(self, mean, std_deviation, theta=0.35, dt=1e-2, x0=None, decay_period=100000):
+    def __init__(self, mean, std_deviation, theta=0.15, dt=1e-2, x0=None, decay_period=100000):
         self.theta = theta
         self.mean = mean
         self.std_dev = std_deviation
@@ -61,7 +61,7 @@ class OUActionNoise:
 
 class ReplayBuffer:
     """Experience replay buffer with separate states for actor and critic"""
-    def __init__(self, actor_state_dim, critic_state_dim, buffer_capacity=20000, batch_size=64):
+    def __init__(self, actor_state_dim, critic_state_dim, buffer_capacity=200000, batch_size=128):
         self.buffer_capacity = buffer_capacity
         self.batch_size = batch_size
         self.buffer = deque(maxlen=buffer_capacity)
@@ -125,6 +125,7 @@ class Actor(nn.Module):
         # Create hidden layers dynamically
         for hidden_dim in hidden_dims:
             layers.append(nn.Linear(current_dim, hidden_dim))
+            layers.append(nn.BatchNorm1d(hidden_dim))  
             layers.append(nn.ReLU())
             current_dim = hidden_dim
         
@@ -161,6 +162,7 @@ class Critic(nn.Module):
         current_state_dim = state_dim
         for hidden_dim in hidden_dims[:2]:  # Up to first two layers for state
             state_layers.append(nn.Linear(current_state_dim, hidden_dim))
+            state_layers.append(nn.BatchNorm1d(hidden_dim)) 
             state_layers.append(nn.ReLU())
             current_state_dim = hidden_dim
         self.state_layers = nn.Sequential(*state_layers)
@@ -176,6 +178,7 @@ class Critic(nn.Module):
         combined_layers = []
         for hidden_dim in hidden_dims[2:] if len(hidden_dims) > 2 else []:
             combined_layers.append(nn.Linear(combined_dim, hidden_dim))
+            combined_layers.append(nn.BatchNorm1d(hidden_dim)) 
             combined_layers.append(nn.ReLU())
             combined_dim = hidden_dim
 
@@ -211,8 +214,8 @@ class DDPG:
         self.critic_target.load_state_dict(self.critic.state_dict())
         
         # Initialize optimizers
-        self.actor_optimizer = optim.AdamW(self.actor.parameters(), lr=1e-5)
-        self.critic_optimizer = optim.AdamW(self.critic.parameters(), lr=1e-5)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=1e-3)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=1e-3)
         
         # Initialize replay buffer (modified to store both actor and critic states)
         self.buffer = ReplayBuffer(actor_state_dim, critic_state_dim)
@@ -225,16 +228,47 @@ class DDPG:
         
         # Hyperparameters
         self.gamma = 0.99  # Discount factor
-        self.tau = 0.0005 # Target network update rate (0.01 for depth only)
+        self.tau = 0.001 # Target network update rate (0.01 for depth only)
+
+
+    def update_learning_rates(self, episode, avg_recent_rewards, decay_factor=0.5, patience=100):
+        """
+        Reduce learning rate when performance plateaus
+        """
+        if not hasattr(self, 'best_reward'):
+            self.best_reward = float('-inf')
+            self.plateau_counter = 0
+        
+        # Check if we've improved
+        if avg_recent_rewards > self.best_reward:
+            self.best_reward = avg_recent_rewards
+            self.plateau_counter = 0
+        else:
+            self.plateau_counter += 1
+        
+        # If we've plateaued for 'patience' episodes, reduce learning rate
+        if self.plateau_counter >= patience:
+            for param_group in self.actor_optimizer.param_groups:
+                param_group['lr'] *= decay_factor
+            for param_group in self.critic_optimizer.param_groups:
+                param_group['lr'] *= decay_factor
+            
+            self.plateau_counter = 0  # Reset counter
+            return True  # Return True if LR was updated
+        
+        return False
     
     def get_action(self, state, add_noise=True):
         """Get action from actor with optional noise for exploration"""
         state = torch.FloatTensor(state).to(self.device)
+
+        if state.dim() == 1:
+            state = state.unsqueeze(0) 
         self.actor.eval()  # Set to evaluation mode
         
         with torch.no_grad():
             action = self.actor(state).cpu().numpy()
-        
+        action = np.reshape(action, -1) 
         self.actor.train()  # Back to training mode
         
         if add_noise:
@@ -285,7 +319,6 @@ class DDPG:
         # Update actor using deterministic policy gradient
         actions_pred = self.actor(actor_states)
         actor_loss = -self.critic(critic_states, actions_pred).mean()
-        
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         self.actor_optimizer.step()
@@ -330,8 +363,8 @@ class DDPG_ROS2(Node):
         self.config = config
 
         # Define separate dimensions for actor and critic
-        self.actor_state_dim = 10   # Example: position_err, v_err, orientation_err
-        self.critic_state_dim = 16  # error states + commands
+        self.actor_state_dim = 13   # Example: position_err, v_err, orientation_err
+        self.critic_state_dim = 19  # error states + commands
         self.action_dim = 6  # 4 thrusters + 2 servo angles
         self.action_bound = 1.0  # All commands between -1 and 1
         
@@ -413,7 +446,7 @@ class DDPG_ROS2(Node):
         self.declare_parameter('max_steps', 500)
         self.declare_parameter('model_path', '')
         
-        self.declare_parameter('max_episodes', 500)  # Default 1000 episodes
+        self.declare_parameter('max_episodes', 10000)  # Default 1000 episodes
         self.max_episodes = self.get_parameter('max_episodes').value
 
         self.training_mode = self.get_parameter('training_mode').value
@@ -646,6 +679,7 @@ class DDPG_ROS2(Node):
     def publish_action(self, action):
         """Publish actions to ROS2 topics"""
         # Split action into thruster commands and servo angles
+
         thruster_cmds = action[:4]
         servo_angles_normalized = action[4:]    
 
@@ -661,10 +695,10 @@ class DDPG_ROS2(Node):
         # Map to appropriate publishers
         #All DOFs
         thruster_mapping = [
-            ('heave_bow', 0.8* thruster_cmds[2]),
-            ('heave_stern', 0.8 * thruster_cmds[3]),
-            ('surge_port', 0.4* thruster_cmds[0]),
-            ('surge_starboard', 0.4 *  thruster_cmds[1]),
+            ('heave_bow', thruster_cmds[2]),
+            ('heave_stern', thruster_cmds[3]),
+            ('surge_port',  0.6 * thruster_cmds[0]),
+            ('surge_starboard', 0.6 * thruster_cmds[1]),
             ('port_servo', servo_angles_rad[0]),
             ('starboard_servo', servo_angles_rad[1])
         ]
@@ -800,7 +834,7 @@ class DDPG_ROS2(Node):
 
         # Total reward
         reward =   -(
-            -w1 * performance_error +
+            -w1 * performance_error + #positive without exponential
             w2 * servo_smoothness_penalty +
             w3 * thruster_usage_penalty +
             w4 * thruster_smoothness_penalty +
@@ -818,7 +852,7 @@ class DDPG_ROS2(Node):
         # print(f"Thruster Delta Reward Contribution: {-w6 * thruster_delta_reward}")
         # print(f"Thruster action penalty: {w7 * thruster_action_penalty}")
         # print(reward)
-        return reward/30
+        return reward
 
     def control_loop(self):
         """Main control loop using separate state inputs for actor and critic"""
@@ -889,28 +923,28 @@ class DDPG_ROS2(Node):
         yaw_rate_error = self.omega_ref_err[2:3]
 
         actor_state = np.concatenate([
-            # depth_error,               
-            # surge_velocity_error,    
-            # sway_velocity_error,       
-            # heave_velocity_error,     
-            # roll_error, 
-            # pitch_error, 
-            # yaw_error,  
-            depth/2,                      
+            depth_error,               
+            surge_error,    
+            sway_error,       
+            # heave_error,     
+            roll_error, 
+            pitch_error, 
+            yaw_error,  
+            depth,                      
             surge, 
             sway, 
             heave,  
             roll, 
             pitch, 
             yaw / np.pi,           
-            roll_rate,
-            pitch_rate,
-            yaw_rate,
+            # roll_rate,
+            # pitch_rate,
+            # yaw_rate,
         ])
 
         # Create critic state by concatenating the components you want
         critic_state = np.concatenate([
-            depth_error/2,                 
+            depth_error,                 
             surge_error,
             sway_error, 
             #heave_error,  
@@ -920,16 +954,16 @@ class DDPG_ROS2(Node):
             # roll_rate_error,
             # pitch_rate_error,
             # yaw_rate_error,
-            # depth,                      
-            # surge, 
-            # sway, 
-            # heave,  
-            # roll,
-            # pitch,
+            depth,                      
+            surge, 
+            sway, 
+            heave,  
+            roll,
+            pitch,
             yaw / np.pi,           
-            roll_rate,
-            pitch_rate,
-            yaw_rate,
+            # roll_rate,
+            # pitch_rate,
+            # yaw_rate,
             self.joint_angles,           
             np.array([                  
                 self.thrust_heave_bow,
@@ -941,7 +975,7 @@ class DDPG_ROS2(Node):
 
         # Get action from agent based on actor state only
         action = self.agent.get_action(actor_state, add_noise=self.training_mode)
-        
+        action = np.reshape(action, -1) 
         # Publish thruster and servo commands
         self.publish_action(action)
         
@@ -993,8 +1027,28 @@ class DDPG_ROS2(Node):
             self.episode_step = 0  # Reset step counter (you had self.episode_step = self.episode_step)
             self.episode_count += 1
             
+            #Learning rate update feature
+            # Track recent rewards for learning rate adjustment
+            if not hasattr(self, 'recent_rewards'):
+                self.recent_rewards = []
+            
+            self.recent_rewards.append(self.episode_reward)
+            
+            # Keep only last 10 rewards for moving average
+            if len(self.recent_rewards) > 10:
+                self.recent_rewards.pop(0)
+            
+            # Calculate average reward
+            avg_reward = sum(self.recent_rewards) / len(self.recent_rewards)
+            
+            # Update learning rates based on performance
+            lr_updated = self.agent.update_learning_rates(self.episode_count, avg_reward)
+            
+            if lr_updated:
+                self.get_logger().info(f"Episode {self.episode_count}: Learning rate decreased due to performance plateau")
+        
             # Save model periodically
-            if self.episode_count % 200 == 0:
+            if self.episode_count % 1 == 0:
                 #     model_path = f"ddpg_auv_model_ep{self.episode_count}.pt"
                 #     self.agent.save_weights(model_path)
                 #     self.get_logger().info(f"Model saved to {model_path}")
@@ -1044,8 +1098,13 @@ class DDPG_ROS2(Node):
         max_steps = self.config['training']['max_t']
         step_limit_exceeded = self.episode_step >= max_steps
 
-        # Episode terminates ONLY if time or step limits are exceeded
-        done = time_limit_exceeded #or step_limit_exceeded
+        # Yaw error termination - terminate if yaw error exceeds 10 degrees
+        yaw_error = self.orientation_err[2:3]
+        yaw_error_exceeded = abs(float(yaw_error)) > (10 * np.pi / 180)  # Convert 10 degrees to radians
+        
+        # Episode terminates if time limit, step limit, or yaw error is exceeded
+        done = time_limit_exceeded #or yaw_error_exceeded #or step_limit_exceeded
+
 
         # Log the reason for termination
         # if done:
