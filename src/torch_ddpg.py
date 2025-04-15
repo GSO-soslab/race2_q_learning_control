@@ -125,7 +125,7 @@ class Actor(nn.Module):
         # Create hidden layers dynamically
         for hidden_dim in hidden_dims:
             layers.append(nn.Linear(current_dim, hidden_dim))
-            layers.append(nn.BatchNorm1d(hidden_dim))  
+            layers.append(nn.LayerNorm(hidden_dim))  
             layers.append(nn.ReLU())
             current_dim = hidden_dim
         
@@ -162,7 +162,7 @@ class Critic(nn.Module):
         current_state_dim = state_dim
         for hidden_dim in hidden_dims[:2]:  # Up to first two layers for state
             state_layers.append(nn.Linear(current_state_dim, hidden_dim))
-            state_layers.append(nn.BatchNorm1d(hidden_dim)) 
+            state_layers.append(nn.LayerNorm(hidden_dim)) 
             state_layers.append(nn.ReLU())
             current_state_dim = hidden_dim
         self.state_layers = nn.Sequential(*state_layers)
@@ -178,7 +178,7 @@ class Critic(nn.Module):
         combined_layers = []
         for hidden_dim in hidden_dims[2:] if len(hidden_dims) > 2 else []:
             combined_layers.append(nn.Linear(combined_dim, hidden_dim))
-            combined_layers.append(nn.BatchNorm1d(hidden_dim)) 
+            combined_layers.append(nn.LayerNorm(hidden_dim)) 
             combined_layers.append(nn.ReLU())
             combined_dim = hidden_dim
 
