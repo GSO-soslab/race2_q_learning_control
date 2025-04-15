@@ -40,7 +40,7 @@ class CustomSetPointPublisher(Node):
         )
         
         # Declare parameters with default values
-        self.declare_parameter('random_duration',0.2)
+        self.declare_parameter('random_duration',30.0)
         self.declare_parameter('rate_hz', 10.0)
         self.declare_parameter('enable_resets', False)
         self.declare_parameter('reset_interval',0.1)
@@ -75,7 +75,7 @@ class CustomSetPointPublisher(Node):
         self.stable_angular_rate = Vector3(x=0.0, y=0.0, z=0.0)
         
         # Random ranges for fields we want to vary
-        self.pos_z_min, self.pos_z_max = 0.0, 3.0
+        self.pos_z_min, self.pos_z_max = 0.0, 5.0
         self.ori_z_min, self.ori_z_max = -np.pi, np.pi
         self.vel_x_min, self.vel_x_max = -0.28, 0.28
         
@@ -228,7 +228,7 @@ class CustomSetPointPublisher(Node):
                 self.prev_position_z = current_position.z
                 
                 center_ori_z = self.stable_orientation.z
-                limit_ori_z = min(self.ori_z_range/2, self.max_ori_z_range/2)
+                limit_ori_z = min(self.ori_z_range, self.max_ori_z_range)
                 current_orientation.z = self.biased_random(
                     self.prev_orientation_z,
                     center_ori_z - limit_ori_z,
@@ -239,7 +239,7 @@ class CustomSetPointPublisher(Node):
             elif period_index == 1:
                 # Vary orientation.z and velocity.x
                 center_ori_z = self.stable_orientation.z
-                limit_ori_z = min(self.ori_z_range/2, self.max_ori_z_range/2)
+                limit_ori_z = min(self.ori_z_range, self.max_ori_z_range)
                 current_orientation.z = self.biased_random(
                     self.prev_orientation_z,
                     center_ori_z - limit_ori_z,

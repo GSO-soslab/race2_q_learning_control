@@ -1,0 +1,60 @@
+
+import torch.nn as nn
+import torch
+
+class Critic(nn.Module):
+    """Critic Network for DDPG using PyTorch, configured from config file"""
+    def __init__(self, state_dim, action_dim, config):
+        # Validate config is provided and contains required keys
+        if config is None:
+            raise ValueError("Configuration must be provided for Critic initialization")
+        if 'qnetwork' not in config:
+            raise ValueError("Configuration must contain 'qnetwork' key")
+        if 'critic_hidden_layers' not in config.get('qnetwork', {}):
+            raise ValueError("Configuration must specify 'critic_hidden_layers' in 'qnetwork'")
+        
+        super(Critic, self).__init__()
+        hidden_dims = config.get('qnetwork', {}).get('critic_hidden_layers')
+        
+        # Ensure there's at least one hidden layer for state and action
+        if len(hidden_dims) < 1:
+            raise ValueError("Critic must have at least one hidden layer")
+        
+        # Separate processing for state and action
+        # Dynamically create state layers
+        state_layers = []
+        current_state_dim = state_dim
+        for hidden_dim in hidden_dims[:2]:  # Up to first two layers for state
+            state_layers.append(nn.Linear(current_state_dim, hidden_dim))
+            state_layers.append(nn.LayerNorm(hidden_dim)) 
+            state_layers.append(nn.ReLU())
+            current_state_dim = hidden_dim
+        self.state_layers = nn.Sequential(*state_layers)
+        
+        # Action processing layer
+        self.action_layer = nn.Sequential(
+            nn.Linear(action_dim, hidden_dims[1] if len(hidden_dims) > 1 else hidden_dims[0]),
+            nn.ReLU()
+        )
+        
+        # Combined processing layers
+        combined_dim = hidden_dims[1] * 2 if len(hidden_dims) > 1 else sum(hidden_dims)
+        combined_layers = []
+        for hidden_dim in hidden_dims[2:] if len(hidden_dims) > 2 else []:
+            combined_layers.append(nn.Linear(combined_dim, hidden_dim))
+            combined_layers.append(nn.LayerNorm(hidden_dim)) 
+            combined_layers.append(nn.ReLU())
+            combined_dim = hidden_dim
+
+        # Final output layer with Sigmoid activation
+        combined_layers.append(nn.Linear(combined_dim, 1))
+        # combined_layers.append(nn.Sigmoid()) 
+        combined_layers.append(nn.Tanh()) 
+
+        self.combined_layers = nn.Sequential(*combined_layers)
+    
+    def forward(self, state, action):
+        state_features = self.state_layers(state)
+        action_features = self.action_layer(action)
+        combined = torch.cat([state_features, action_features], dim=1)
+        return self.combined_layers(combined)

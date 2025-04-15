@@ -65,7 +65,7 @@ reward_function:
 
 training:
   max_episodes: 10000    # Maximum episodes for training
-  max_t: 5       # Maximum time per episode in secs
+  max_t: 15       # Maximum time per episode in secs
   target_avg_reward: 20  # Target average reward for early stopping
   plot_interval: 2    # Interval for updating plots during training
   random_seed: 42      # Random seed for reproducibility
