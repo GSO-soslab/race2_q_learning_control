@@ -48,17 +48,6 @@ class DDPG_ROS(Node):
         self.critic_loss_pub = self.create_publisher(Float32, 'ddpg/critic_loss', 10)
         self.episode_pub = self.create_publisher(Float32, 'ddpg/episode', 10)
 
-        self.imu_subscription = self.create_subscription(
-                                Imu,
-                                '/race2_auv/imu/data',
-                                self.imu_callback,
-                                10)
-
-        self.dvl_subscription = self.create_subscription(
-                                TwistStamped,  # Or stonefish_ros2/DVL 
-                                '/race2_auv/dvl/twist',  # Or the stonefish raw topic
-                                self.dvl_callback,
-                                10)
         
         self.create_subscription(ControlProcess,  
                                 '/race2_auv/controller/process/value',
@@ -194,65 +183,11 @@ class DDPG_ROS(Node):
         # Create timer for control loop
         self.timer = self.create_timer(1/10, self.control_loop)  # 100 Hz control loop
         
-
-    def imu_callback(self, msg):
-        # Extract angular velocity
-        self.angular_vel = np.array([
-            msg.angular_velocity.x,
-            msg.angular_velocity.y,
-            msg.angular_velocity.z
-        ])
-        
-        # Extract linear acceleration
-        self.linear_accel = np.array([
-            msg.linear_acceleration.x,
-            msg.linear_acceleration.y,
-            msg.linear_acceleration.z
-        ])
-        
-        # Calculate angular acceleration
-        current_time = self.get_clock().now()
-        dt = (current_time - self.prev_time_imu).nanoseconds / 1e9
-        if dt > 0:
-            self.angular_accel = (self.angular_vel - self.prev_angular_vel) / dt
-        
-        # Update previous values
-        self.prev_angular_vel = self.angular_vel.copy()
-        self.prev_time_imu = current_time
-        
-        # Construct state vector whenever we get new data
-        self.update_state()
-    
-    def dvl_callback(self, msg):
-        # Extract linear velocity from DVL
-        self.linear_vel = np.array([
-            msg.twist.linear.x,
-            msg.twist.linear.y,
-            msg.twist.linear.z
-        ])
-        
-        # Calculate velocity error
-        self.velocity_error = self.linear_vel - self.velocity_setpoint
-        
-        # Construct state vector whenever we get new data
-        self.update_state()
-    
-    def update_state(self):
-        # Construct the complete state vector according to the paper
-        state = np.concatenate([
-            self.linear_vel,      # vt
-            self.angular_vel,     # ωt
-            self.linear_accel,    # v̇t
-            self.angular_accel,   # ω̇t
-            self.previous_commands, # ut-1
-            self.velocity_error   # et
-        ])
-        
-        # self.get_logger().info(f"State updated: {state}")
-        return state
-
     def state_callback(self, data):
         """Process state updates from sensors"""
+        # Add timestamp to the state observation
+        self.last_state_timestamp = time.time()
+        
         # Extract state values
         self.position_state = np.array([data.position.x, data.position.y, data.position.z])
         self.orientation_state = np.array([data.orientation.x, data.orientation.y, data.orientation.z])
@@ -261,13 +196,16 @@ class DDPG_ROS(Node):
         
         # Update current state for RL agent
         self.current_state = np.concatenate([
-                self.position_state[2:3],
-                self.v_state[:2],
-                self.orientation_state[:3],
+            self.position_state[2:3],
+            self.v_state[:2],
+            self.orientation_state[:3],
         ])
         
-        # Calculate errors
-        # self.update_errors()
+        # Flag indicating we have a new state after the last action
+        if hasattr(self, 'last_action_timestamp') and self.last_state_timestamp > self.last_action_timestamp:
+            self.new_state_available = True
+
+
 
     def setpoint_callback(self, data):
         """Process setpoint updates"""
@@ -404,55 +342,19 @@ class DDPG_ROS(Node):
             ('starboard_servo', servo_angles_rad[1])
         ]
 
-        ## Only depth
-        # thruster_mapping = [
-        #     ('heave_bow', thruster_cmds[0]),
-        #     ('surge_port', 0),
-        #     ('surge_starboard', 0),
-        #     ('heave_stern', thruster_cmds[3]),
-        #     ('port_servo', 0),
-        #     ('starboard_servo', 0)
-        # ]
-
-        # Depth and heading
-        # thruster_mapping = [
-        #     ('heave_bow', thruster_cmds[0]),
-        #     ('surge_port', thruster_cmds[1]),
-        #     ('surge_starboard', thruster_cmds[2]),
-        #     ('heave_stern', thruster_cmds[3]),
-        #     ('port_servo', 0),
-        #     ('starboard_servo', 0)
-        # ]
-
         # Publish commands
         for name, value in thruster_mapping:
             msg = Float64()
             msg.data = float(value)
             self.thruster_pubs[name].publish(msg)
-
-    # def calculate_reward(self, prev_state, current_state):
-    #     # Main objective - track velocity setpoint
-    #     reward_velocity = -np.linalg.norm(self.velocity_error)
-        
-    #     # Smoothness reward - penalize jerky thruster changes
-    #     thruster_diff = self.thruster_action - self.thruster_command_action_prev[0]
-    #     reward_smoothness = -0.2 * np.sum(np.abs(thruster_diff))
-        
-    #     # Stability reward - penalize excessive angular motion
-    #     reward_stability = -0.3 * np.linalg.norm(self.angular_vel)
-        
-    #     # Energy efficiency - penalize high thruster usage
-    #     reward_energy = -0.1 * np.sum(np.square(self.thruster_action))
-        
-    #     # Combined reward
-    #     reward = reward_velocity + reward_smoothness + reward_stability + reward_energy
-        
-    #     # For debugging
-    #     self.get_logger().debug(f"Rewards: vel={reward_velocity:.2f}, smooth={reward_smoothness:.2f}, " 
-    #                         f"stab={reward_stability:.2f}, energy={reward_energy:.2f}, total={reward:.2f}")
-        
-    #     return reward
     
+        # Record action timestamp
+        self.last_action_timestamp = time.time()
+        self.last_action = action.copy()
+        
+        # Reset the new state flag since we're waiting for a new state after this action
+        self.new_state_available = False
+
     def calculate_reward(self, prev_state, current_state):
         """Calculate reward based on specified error components"""
         w = self.config['reward_function']
@@ -558,47 +460,10 @@ class DDPG_ROS(Node):
     def control_loop(self):
         """Main control loop using separate state inputs for actor and critic"""
 
-        # # vt: Linear velocities from DVL
-        # linear_vel = self.v_state 
-        # # print(linear_vel)
-        # # ωt: Angular velocities from IMU
-        # angular_vel = self.omega_ref_state  
-        # # print(angular_vel)
-        # # v̇t: Linear accelerations from IMU
-        # linear_accel = self.linear_accel  # Ensure this is populated from IMU data
-        # # print(linear_accel)
-        # # ω̇t: Angular accelerations (derived from IMU angular velocities)
-        # angular_accel = self.angular_accel  
-        # # print(angular_accel)
-        # # ut-1: Previous commands
-        # prev_commands = self.prev_action if hasattr(self, 'prev_action') and self.prev_action is not None else np.zeros(self.action_dim)
-        # # print(prev_commands)
-        # # et: Velocity error
-        # velocity_error = self.v_err  # Difference between current and desired velocities
-        # # print(velocity_error)
-        # # breakpoint()
-        # # Create the complete state according to the paper definition
-        # complete_state = np.concatenate([
-        #     linear_vel,      # vt
-        #     angular_vel,     # ωt
-        #     linear_accel,    # v̇t
-        #     angular_accel,   # ω̇t
-        #     prev_commands,   # ut-1
-        #     velocity_error   # et
-        # ])
-        
-        # actor_state = complete_state  # Use the complete state for actor
-        
-        # critic_state = np.concatenate([
-        #     complete_state,     # Paper-defined state
-        #     self.joint_angles,  # Current servo angles
-        #     np.array([          # Current thrust values
-        #         self.thrust_heave_bow,
-        #         self.thrust_surge_port,
-        #         self.thrust_surge_starboard,
-        #         self.thrust_heave_stern
-        #     ])
-        # ])
+        if not hasattr(self, 'new_state_available'):
+            self.new_state_available = False
+        if not hasattr(self, 'last_action_timestamp'):
+            self.last_action_timestamp = 0
         
         depth = self.position_state[2:3]
         surge = self.v_state[0:1]     
@@ -677,8 +542,7 @@ class DDPG_ROS(Node):
         # Get action from agent based on actor state only
         action = self.agent.get_action(actor_state, add_noise=self.training_mode)
         action = np.reshape(action, -1) 
-        # Publish thruster and servo commands
-        self.publish_action(action)
+
         
         # Calculate current time if episode_start_time is not set
         if not hasattr(self, 'episode_start_time') or self.episode_start_time is None:
@@ -687,7 +551,10 @@ class DDPG_ROS(Node):
         done = False
 
         # If in training mode, generate reward and train
-        if self.training_mode and self.prev_actor_state is not None and self.prev_critic_state is not None and self.prev_action is not None:
+        if (self.training_mode and self.prev_actor_state is not None and 
+                self.prev_critic_state is not None and self.prev_action is not None and 
+                self.new_state_available):
+            print("New State received!!!")
             reward = self.calculate_reward(self.prev_critic_state, critic_state)
             
             # Ensure reward is a scalar value
@@ -709,20 +576,28 @@ class DDPG_ROS(Node):
                 critic_state, 
                 done
             )
-            
-            # Train agent
-            critic_loss, actor_loss, reward_value, current_q_value = self.agent.learn()            
-            print("Hello")
-            self.publish_metrics(reward_value, current_q_value, actor_loss, critic_loss)
-            self.step_counter += 1
 
-            if critic_loss is not None:
+            # Train agent
+            # critic_loss, actor_loss, reward_value, current_q_value = self.agent.learn()    #old version
+            result = self.agent.learn()
+            if all(v is not None for v in result):
+                critic_loss, actor_loss, reward_value, current_q_value = result
+                self.publish_metrics(reward_value, current_q_value, actor_loss, critic_loss)
+                self.step_counter += 1        
                 self.get_logger().debug(f"Critic Loss: {critic_loss:.4f}, Actor Loss: {actor_loss:.4f}")
+            else:
+                print("Learn returned None — skipping training this step.")
+            
+            # if critic_loss is not None:
+
                 
         elif not self.training_mode:
             # When in inference mode, still check if episode is done
             done = self.is_done(critic_state)
             
+        # Publish thruster and servo commands
+        self.publish_action(action)
+
         # Update episode step counter
         self.episode_step += 1
 

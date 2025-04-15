@@ -114,7 +114,7 @@ class DDPG:
     def learn(self):
         """Update actor and critic networks from replay buffer"""
         if self.buffer.size() < self.buffer.batch_size:
-            return None, None
+            return None, None, None, None
         
         # Sample a batch from replay buffer
         actor_states, critic_states, actions, rewards, next_actor_states, next_critic_states, dones = self.buffer.sample()
@@ -127,7 +127,6 @@ class DDPG:
         next_actor_states = next_actor_states.to(self.device)
         next_critic_states = next_critic_states.to(self.device)
         dones = dones.to(self.device)
-        
         # Update critic
         with torch.no_grad():
             next_actions = self.actor_target(next_actor_states)
@@ -151,8 +150,7 @@ class DDPG:
         
         # Update target networks
         self.update_targets()
-        print("Learn return:", critic_loss.item(), actor_loss, rewards, current_q)
-        return critic_loss.item(), actor_loss.item(), rewards.item(), current_q.mean().item()
+        return critic_loss.item(), actor_loss.item(), rewards.mean().item(), current_q.mean().item()    
     
     def update_targets(self):
         """Soft update target networks"""
