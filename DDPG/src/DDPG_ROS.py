@@ -1,13 +1,15 @@
 import os,time, datetime
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float64
+from std_msgs.msg import Float64, Float32
 from geometry_msgs.msg import TwistStamped
 from mvp_msgs.msg import ControlProcess
 from sensor_msgs.msg import Imu
-import DDPG
+from DDPG import DDPG 
 import torch
 import numpy as np
+from config_utils import load_config 
+
 
 class DDPG_ROS(Node):
     """DDPG Agent for AUV control integrated with ROS2"""
@@ -38,6 +40,14 @@ class DDPG_ROS(Node):
             'starboard_servo': self.create_publisher(Float64, '/race2_auv/control/surge_starboard_servo', 1)
         }
         
+
+        # publishers for training metrics
+        self.q_value_pub = self.create_publisher(Float32, 'ddpg/q_value', 10)
+        self.reward_pub = self.create_publisher(Float32, 'ddpg/reward', 10)
+        self.actor_loss_pub = self.create_publisher(Float32, 'ddpg/actor_loss', 10)
+        self.critic_loss_pub = self.create_publisher(Float32, 'ddpg/critic_loss', 10)
+        self.episode_pub = self.create_publisher(Float32, 'ddpg/episode', 10)
+
         self.imu_subscription = self.create_subscription(
                                 Imu,
                                 '/race2_auv/imu/data',
@@ -164,6 +174,10 @@ class DDPG_ROS(Node):
         self.u_prev = np.zeros((10, 4))  # Store last 10 thruster commands
         self.thruster_command_action_prev = np.zeros((10, 4))  # Store last 10 thruster actions
         
+        # Episode counter
+        self.current_episode = 0
+        self.step_counter = 0
+
         # Load model if available
         if model_path:
             try:
@@ -330,6 +344,39 @@ class DDPG_ROS(Node):
         
         return angle_rad
     
+    def publish_metrics(self, reward, q_value=None, actor_loss=None, critic_loss=None):
+        # Publish current episode
+        episode_msg = Float32()
+        episode_msg.data = float(self.current_episode)
+        self.episode_pub.publish(episode_msg)
+        
+        # Publish step within episode
+        step_msg = Float32()
+        step_msg.data = float(self.step_counter)
+        self.create_publisher(Float32, 'ddpg/step', 10).publish(step_msg)
+        
+        # Publish reward
+        reward_msg = Float32()
+        reward_msg.data = float(reward)
+        self.reward_pub.publish(reward_msg)
+        
+        # Publish Q-value if available
+        if q_value is not None:
+            q_msg = Float32()
+            q_msg.data = float(q_value)
+            self.q_value_pub.publish(q_msg)
+        
+        # Publish losses if available
+        if actor_loss is not None:
+            actor_msg = Float32()
+            actor_msg.data = float(actor_loss)
+            self.actor_loss_pub.publish(actor_msg)
+        
+        if critic_loss is not None:
+            critic_msg = Float32()
+            critic_msg.data = float(critic_loss)
+            self.critic_loss_pub.publish(critic_msg)
+
     def publish_action(self, action):
         """Publish actions to ROS2 topics"""
         # Split action into thruster commands and servo angles
@@ -664,7 +711,11 @@ class DDPG_ROS(Node):
             )
             
             # Train agent
-            critic_loss, actor_loss = self.agent.learn()
+            critic_loss, actor_loss, reward_value, current_q_value = self.agent.learn()            
+            print("Hello")
+            self.publish_metrics(reward_value, current_q_value, actor_loss, critic_loss)
+            self.step_counter += 1
+
             if critic_loss is not None:
                 self.get_logger().debug(f"Critic Loss: {critic_loss:.4f}, Actor Loss: {actor_loss:.4f}")
                 
@@ -759,6 +810,8 @@ class DDPG_ROS(Node):
         # Episode terminates if time limit, step limit, or yaw error is exceeded
         done = time_limit_exceeded #or yaw_error_exceeded #or step_limit_exceeded
 
+        self.current_episode += 1
+        self.step_counter = 0
 
         # Log the reason for termination
         # if done:
@@ -768,21 +821,29 @@ class DDPG_ROS(Node):
         #         # self.get_logger().info(f"Episode terminated: Step count limit exceeded ({self.episode_step}/{max_steps})")
                 
         return done
+
 def main(args=None):
+    # Initialize ROS
     rclpy.init(args=args)
-    ddpg_ros = DDPG_ROS(DDPG)
     
     try:
-        rclpy.spin(ddpg_ros)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        # Save final model
-        ddpg_ros.agent.save_weights("ddpg_auv_model_final.pt")
-        ddpg_ros.get_logger().info("Final model saved to ddpg_auv_model_final.pt")
+
+        config = load_config()
+        ddpg_ros = DDPG_ROS(config)
         
-        # Destroy the node
-        ddpg_ros.destroy_node()
+        try:
+            rclpy.spin(ddpg_ros)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            # Save final model
+            ddpg_ros.agent.save_weights("ddpg_auv_model_final.pt")
+            ddpg_ros.get_logger().info("Final model saved to ddpg_auv_model_final.pt")
+            ddpg_ros.destroy_node()
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        # Ensure ROS is properly shut down even if exceptions occur
         rclpy.shutdown()
 
 if __name__ == "__main__":

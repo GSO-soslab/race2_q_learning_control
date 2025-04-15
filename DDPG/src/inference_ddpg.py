@@ -191,8 +191,8 @@ class DDPG:
         self.critic_target.load_state_dict(self.critic.state_dict())
         
         # Initialize optimizers
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=0.01)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=0.04)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=0.001)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=0.001)
         
         # Initialize replay buffer (modified to store both actor and critic states)
         self.buffer = ReplayBuffer(actor_state_dim, critic_state_dim)
@@ -205,7 +205,7 @@ class DDPG:
         
         # Hyperparameters
         self.gamma = 0.99  # Discount factor
-        self.tau = 0.03  # Target network update rate (0.01 for depth only)
+        self.tau = 0.001  # Target network update rate (0.01 for depth only)
     
     def get_action(self, actor_state, add_noise=True):
         """Return action for given actor state"""

@@ -1,6 +1,7 @@
 from collections import deque
 import random
-
+import numpy as np
+import torch
 class ReplayBuffer:
     """Experience replay buffer with separate states for actor and critic"""
     def __init__(self, actor_state_dim, critic_state_dim, buffer_capacity=100000, batch_size=128):

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-import os,time, datetime
-import rclpy
+import os
 from rclpy.node import Node
 import numpy as np
 import torch
@@ -8,16 +7,19 @@ import torch.nn as nn
 import torch.optim as optim
 import yaml
 
-import OUActionNoise
-import ReplayBuffer
-import Actor, Critic
+from OUActionNoise import OUActionNoise
+from ReplayBuffer import ReplayBuffer
+from Actor import Actor
+from Critic import Critic
 
-# Set the path to the config file in the parent config directory
-config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config_ddpg.yaml')
+from config_utils import load_config 
 
-# Load the configuration file
-with open(config_path, 'r') as f:
-    config = yaml.safe_load(f)
+
+if __name__ == "__main__":
+    config = load_config()
+else:
+    # When imported, the config will be passed to the class
+    config = None
 
 class DDPG:
     """DDPG Agent for AUV control using PyTorch"""
@@ -149,8 +151,8 @@ class DDPG:
         
         # Update target networks
         self.update_targets()
-        
-        return critic_loss.item(), actor_loss.item()
+        print("Learn return:", critic_loss.item(), actor_loss, rewards, current_q)
+        return critic_loss.item(), actor_loss.item(), rewards.item(), current_q.mean().item()
     
     def update_targets(self):
         """Soft update target networks"""
