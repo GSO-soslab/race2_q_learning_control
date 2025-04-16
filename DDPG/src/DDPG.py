@@ -38,7 +38,10 @@ class DDPG:
         self.critic = Critic(critic_state_dim, action_dim, config).to(device)
         self.critic_target = Critic(critic_state_dim, action_dim, config).to(device)
         self.critic_target.load_state_dict(self.critic.state_dict())
-        
+
+        critic_change = self.critic.check_if_stuck()
+        print(f"Critic weight change: {critic_change:.8f}")
+
         # Initialize optimizers
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=1e-3)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=1e-3)
@@ -49,7 +52,7 @@ class DDPG:
         # Initialize noise process
         self.noise = OUActionNoise(
             mean=np.zeros(action_dim),
-            std_deviation=0.2 * np.ones(action_dim)
+            std_deviation=0.1 * np.ones(action_dim)
         )
         
         # Hyperparameters
@@ -93,7 +96,7 @@ class DDPG:
         self.actor.eval()  # Set to evaluation mode
         
         with torch.no_grad():
-            action = self.actor(state).cpu().numpy()
+            action = self.actor(state).cpu().detach().numpy()
         action = np.reshape(action, -1) 
         self.actor.train()  # Back to training mode
         
@@ -134,23 +137,27 @@ class DDPG:
             target_q = rewards + self.gamma * next_q_values * (1 - dones)
             # print("Target Q Values!!!", target_q)
         
+
         current_q = self.critic(critic_states, actions)
-        critic_loss = nn.MSELoss()(current_q, target_q)
-        
+        self.critic.train()
         self.critic_optimizer.zero_grad()
+        critic_loss = nn.MSELoss()(target_q,current_q)
+        
         critic_loss.backward()
         self.critic_optimizer.step()
         
         # Update actor using deterministic policy gradient
-        actions_pred = self.actor(actor_states)
-        actor_loss = -self.critic(critic_states, actions_pred).mean()
+        self.critic.eval()
         self.actor_optimizer.zero_grad()
+        actions_pred = self.actor.forward(actor_states)  #mu
+        self.actor.train()
+        actor_loss = -self.critic.forward(critic_states, actions_pred).mean()
         actor_loss.backward()
         self.actor_optimizer.step()
         
         # Update target networks
         self.update_targets()
-        return critic_loss.item(), actor_loss.item(), rewards.mean().item(), current_q.mean().item()    
+        return critic_loss.item(), actor_loss.item(), rewards.sum().item(), current_q.mean().item()    
     
     def update_targets(self):
         """Soft update target networks"""

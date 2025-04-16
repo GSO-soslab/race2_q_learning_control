@@ -40,10 +40,10 @@ class CustomSetPointPublisher(Node):
         )
         
         # Declare parameters with default values
-        self.declare_parameter('random_duration',1.0)
+        self.declare_parameter('random_duration',30.0)
         self.declare_parameter('rate_hz', 10.0)
         self.declare_parameter('enable_resets', False)
-        self.declare_parameter('reset_interval',0.1)
+        self.declare_parameter('reset_interval',2.0)
         
         # Add exploration parameters
         self.declare_parameter('exploration_factor', 1.0)
@@ -69,13 +69,13 @@ class CustomSetPointPublisher(Node):
         self.vel_noise = OUNoise(3, sigma=0.05)
         
         # Stable values to revert to or to use when a field is not being varied
-        self.stable_position = Vector3(x=0.0, y=0.0, z=4.0)
+        self.stable_position = Vector3(x=0.0, y=0.0, z=2.0)
         self.stable_orientation = Vector3(x=3.14, y=0.0, z=0.0)
         self.stable_velocity = Vector3(x=0.2, y=0.0, z=0.0)
         self.stable_angular_rate = Vector3(x=0.0, y=0.0, z=0.0)
         
         # Random ranges for fields we want to vary
-        self.pos_z_min, self.pos_z_max = 0.0, 5.0
+        self.pos_z_min, self.pos_z_max = 0.0, 1.0
         self.ori_z_min, self.ori_z_max = -np.pi, np.pi
         self.vel_x_min, self.vel_x_max = -0.28, 0.28
         

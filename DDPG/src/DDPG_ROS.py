@@ -19,8 +19,8 @@ class DDPG_ROS(Node):
         self.config = config
 
         # Define separate dimensions for actor and critic
-        self.actor_state_dim = 13   # Example: position_err, v_err, orientation_err
-        self.critic_state_dim = 19  # error states + commands
+        self.actor_state_dim = 3   # Example: position_err, v_err, orientation_err
+        self.critic_state_dim = 4  # error states + commands
         self.action_dim = 6  # 4 thrusters + 2 servo angles
         self.action_bound = 1.0  # All commands between -1 and 1
         
@@ -336,10 +336,10 @@ class DDPG_ROS(Node):
         thruster_mapping = [
             ('heave_bow', thruster_cmds[2]),
             ('heave_stern', thruster_cmds[3]),
-            ('surge_port',  0.6 * thruster_cmds[0]),
-            ('surge_starboard', 0.6 * thruster_cmds[1]),
-            ('port_servo', servo_angles_rad[0]),
-            ('starboard_servo', servo_angles_rad[1])
+            ('surge_port',  0.0 * thruster_cmds[0]),
+            ('surge_starboard', 0.0 * thruster_cmds[1]),
+            ('port_servo', 0.0 *servo_angles_rad[0]),
+            ('starboard_servo',0.0 * servo_angles_rad[1])
         ]
 
         # Publish commands
@@ -437,7 +437,7 @@ class DDPG_ROS(Node):
 
         # Total reward
         reward =   -(
-            -w1 * performance_error + #positive without exponential
+            w1 * performance_error + #positive without exponential
             w2 * servo_smoothness_penalty +
             w3 * thruster_usage_penalty +
             w4 * thruster_smoothness_penalty +
@@ -456,7 +456,8 @@ class DDPG_ROS(Node):
         # print(f"Thruster action penalty: {w7 * thruster_action_penalty}")
         # print(reward)
         return reward
-
+    def check_if_stuck(model, name="Network"): print(f"{name} weight change: {sum(p.grad.abs().mean().item() if p.grad is not None else 0 for p in model.parameters()):.8f}")
+    
     def control_loop(self):
         """Main control loop using separate state inputs for actor and critic"""
 
@@ -489,20 +490,20 @@ class DDPG_ROS(Node):
         yaw_rate_error = self.omega_ref_err[2:3]
 
         actor_state = np.concatenate([
-            depth_error,               
-            surge_error,    
-            sway_error,       
+            depth_error/5,               
+            # surge_error,    
+            # sway_error,       
             # heave_error,     
-            roll_error, 
-            pitch_error, 
-            yaw_error,  
-            depth,                      
-            surge, 
-            sway, 
+            # roll_error, 
+            # pitch_error, 
+            # yaw_error/np.pi,  
+            depth/5,                      
+            # surge, 
+            # sway, 
             heave,  
-            roll, 
-            pitch, 
-            yaw / np.pi,           
+            # roll, 
+            # pitch, 
+            # yaw /np.pi,           
             # roll_rate,
             # pitch_rate,
             # yaw_rate,
@@ -510,31 +511,31 @@ class DDPG_ROS(Node):
 
         # Create critic state by concatenating the components you want
         critic_state = np.concatenate([
-            depth_error,                 
-            surge_error,
-            sway_error, 
+            depth_error/5,                 
+            # surge_error,
+            # sway_error, 
             #heave_error,  
-            roll_error, 
-            pitch_error, 
-            yaw_error, 
+            # roll_error, 
+            # pitch_error, 
+            # yaw_error/np.pi, 
             # roll_rate_error,
             # pitch_rate_error,
             # yaw_rate_error,
-            depth,                      
-            surge, 
-            sway, 
-            heave,  
-            roll,
-            pitch,
-            yaw / np.pi,           
+            depth/5,                      
+            # surge, 
+            # sway, 
+            # heave,  
+            # roll,
+            # pitch,
+            # yaw /np.pi,           
             # roll_rate,
             # pitch_rate,
             # yaw_rate,
-            self.joint_angles,           
+            # self.joint_angles,           
             np.array([                  
                 self.thrust_heave_bow,
-                self.thrust_surge_port,
-                self.thrust_surge_starboard,
+                # self.thrust_surge_port,
+                # self.thrust_surge_starboard,
                 self.thrust_heave_stern
             ])
         ])
@@ -554,9 +555,7 @@ class DDPG_ROS(Node):
         if (self.training_mode and self.prev_actor_state is not None and 
                 self.prev_critic_state is not None and self.prev_action is not None and 
                 self.new_state_available):
-            print("New State received!!!")
             reward = self.calculate_reward(self.prev_critic_state, critic_state)
-            
             # Ensure reward is a scalar value
             if isinstance(reward, np.ndarray):
                 reward = float(reward.item())
@@ -628,7 +627,7 @@ class DDPG_ROS(Node):
                 self.get_logger().info(f"Episode {self.episode_count}: Learning rate decreased due to performance plateau")
         
             # Save model periodically
-            if self.episode_count % 1 == 0:
+            if self.episode_count % 10 == 0:
                 #     model_path = f"ddpg_auv_model_ep{self.episode_count}.pt"
                 #     self.agent.save_weights(model_path)
                 #     self.get_logger().info(f"Model saved to {model_path}")

@@ -26,9 +26,10 @@ class Critic(nn.Module):
         current_state_dim = state_dim
         for hidden_dim in hidden_dims[:2]:  # Up to first two layers for state
             state_layers.append(nn.Linear(current_state_dim, hidden_dim))
-            state_layers.append(nn.LayerNorm(hidden_dim)) 
+            state_layers.append(nn.LayerNorm(hidden_dim))
             state_layers.append(nn.ReLU())
             current_state_dim = hidden_dim
+        
         self.state_layers = nn.Sequential(*state_layers)
         
         # Action processing layer
@@ -42,17 +43,33 @@ class Critic(nn.Module):
         combined_layers = []
         for hidden_dim in hidden_dims[2:] if len(hidden_dims) > 2 else []:
             combined_layers.append(nn.Linear(combined_dim, hidden_dim))
-            combined_layers.append(nn.LayerNorm(hidden_dim)) 
+            combined_layers.append(nn.LayerNorm(hidden_dim))
             combined_layers.append(nn.ReLU())
             combined_dim = hidden_dim
-
-        # Final output layer with Sigmoid activation
+        
+        # Final output layer with Tanh activation
         combined_layers.append(nn.Linear(combined_dim, 1))
-        # combined_layers.append(nn.Sigmoid()) 
-        combined_layers.append(nn.Tanh()) 
-
+        combined_layers.append(nn.Tanh())
+        
         self.combined_layers = nn.Sequential(*combined_layers)
+        
+        # Initialize weights
+        self._initialize_weights()
     
+    def _initialize_weights(self):
+        """Initialize network weights with Xavier/Glorot initialization"""
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                # Xavier/Glorot initialization for Linear layers
+                nn.init.xavier_uniform_(module.weight)
+                # Initialize bias to small values
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0.01)
+                    
+    def check_if_stuck(self):
+        """One-liner to check if network weights are changing"""
+        return sum(p.grad.abs().mean().item() if p.grad is not None else 0 for p in self.parameters())
+
     def forward(self, state, action):
         state_features = self.state_layers(state)
         action_features = self.action_layer(action)
