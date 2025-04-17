@@ -43,7 +43,7 @@ class DDPG:
         print(f"Critic weight change: {critic_change:.8f}")
 
         # Initialize optimizers
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=1e-3)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=1e-5)
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=1e-3)
         
         # Initialize replay buffer (modified to store both actor and critic states)
@@ -138,7 +138,7 @@ class DDPG:
             # print("Target Q Values!!!", target_q)
         
 
-        current_q = self.critic(critic_states, actions)
+        current_q = self.critic.forward(critic_states, actions)
         self.critic.train()
         self.critic_optimizer.zero_grad()
         critic_loss = nn.MSELoss()(target_q,current_q)
@@ -157,7 +157,7 @@ class DDPG:
         
         # Update target networks
         self.update_targets()
-        return critic_loss.item(), actor_loss.item(), rewards.sum().item(), current_q.mean().item()    
+        return critic_loss.item(), actor_loss.item(), rewards.mean().item(), current_q.mean().item()    
     
     def update_targets(self):
         """Soft update target networks"""

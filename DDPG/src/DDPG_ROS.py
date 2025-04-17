@@ -19,7 +19,7 @@ class DDPG_ROS(Node):
         self.config = config
 
         # Define separate dimensions for actor and critic
-        self.actor_state_dim = 3   # Example: position_err, v_err, orientation_err
+        self.actor_state_dim = 2   # Example: position_err, v_err, orientation_err
         self.critic_state_dim = 4  # error states + commands
         self.action_dim = 6  # 4 thrusters + 2 servo angles
         self.action_bound = 1.0  # All commands between -1 and 1
@@ -234,6 +234,8 @@ class DDPG_ROS(Node):
         self.omega_ref_err[:3],
         ])
 
+        # if hasattr(self, 'last_action_timestamp') and self.last_state_timestamp > self.last_action_timestamp:
+        #     self.new_state_available = True
         # Update errors after setpoint changes
         # self.update_errors()
 
@@ -334,8 +336,8 @@ class DDPG_ROS(Node):
         # Map to appropriate publishers
         #All DOFs
         thruster_mapping = [
-            ('heave_bow', thruster_cmds[2]),
-            ('heave_stern', thruster_cmds[3]),
+            ('heave_bow',  0.5 * thruster_cmds[2]),
+            ('heave_stern', 0.5 * thruster_cmds[3]),
             ('surge_port',  0.0 * thruster_cmds[0]),
             ('surge_starboard', 0.0 * thruster_cmds[1]),
             ('port_servo', 0.0 *servo_angles_rad[0]),
@@ -437,7 +439,7 @@ class DDPG_ROS(Node):
 
         # Total reward
         reward =   -(
-            w1 * performance_error + #positive without exponential
+            -w1 * performance_error + #positive without exponential
             w2 * servo_smoothness_penalty +
             w3 * thruster_usage_penalty +
             w4 * thruster_smoothness_penalty +
@@ -490,17 +492,17 @@ class DDPG_ROS(Node):
         yaw_rate_error = self.omega_ref_err[2:3]
 
         actor_state = np.concatenate([
-            depth_error/5,               
+            depth_error,               
             # surge_error,    
             # sway_error,       
             # heave_error,     
             # roll_error, 
             # pitch_error, 
             # yaw_error/np.pi,  
-            depth/5,                      
+            depth,                      
             # surge, 
             # sway, 
-            heave,  
+            # heave,  
             # roll, 
             # pitch, 
             # yaw /np.pi,           
@@ -511,7 +513,7 @@ class DDPG_ROS(Node):
 
         # Create critic state by concatenating the components you want
         critic_state = np.concatenate([
-            depth_error/5,                 
+            depth_error,                 
             # surge_error,
             # sway_error, 
             #heave_error,  
@@ -521,7 +523,7 @@ class DDPG_ROS(Node):
             # roll_rate_error,
             # pitch_rate_error,
             # yaw_rate_error,
-            depth/5,                      
+            depth,                      
             # surge, 
             # sway, 
             # heave,  
