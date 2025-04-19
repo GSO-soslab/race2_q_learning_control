@@ -21,7 +21,7 @@ class DDPG_ROS(Node):
         # Define separate dimensions for actor and critic
         self.actor_state_dim = 2   # Example: position_err, v_err, orientation_err
         self.critic_state_dim = 4  # error states + commands
-        self.action_dim = 6  # 4 thrusters + 2 servo angles
+        self.action_dim = 2  # 4 thrusters + 2 servo angles
         self.action_bound = 1.0  # All commands between -1 and 1
         
         # Create DDPG agent with separate state dimensions
@@ -147,8 +147,10 @@ class DDPG_ROS(Node):
         self.prev_state_err = None
 
         # Initialize actuator variables
-        self.thruster_action = np.zeros(4)  # For the 4 thrusters
-        self.joint_angles = np.zeros(2)     # For the 2 servo angles
+        self.num_thrusters = 2
+        self.num_servos = 0
+        self.thruster_action = np.zeros(self.num_thrusters)  # For the 4 thrusters
+        self.joint_angles = np.zeros(self.num_servos)     # For the 2 servo angles
         
         self.joint_angles_port = 0.0
         self.joint_angles_starboard = 0.0
@@ -159,9 +161,9 @@ class DDPG_ROS(Node):
         self.thrust_heave_stern = 0.0
 
         # Initialize history arrays for smoothness calculations
-        self.joint_positions_history = np.zeros((10, 2))  # Store last 10 servo positions
-        self.u_prev = np.zeros((10, 4))  # Store last 10 thruster commands
-        self.thruster_command_action_prev = np.zeros((10, 4))  # Store last 10 thruster actions
+        self.joint_positions_history = np.zeros((10, self.num_servos))  # Store last 10 servo positions
+        self.u_prev = np.zeros((10, self.num_thrusters))  # Store last 10 thruster commands
+        self.thruster_command_action_prev = np.zeros((10,self.num_thrusters))  # Store last 10 thruster actions
         
         # Episode counter
         self.current_episode = 0
@@ -321,27 +323,27 @@ class DDPG_ROS(Node):
         """Publish actions to ROS2 topics"""
         # Split action into thruster commands and servo angles
 
-        thruster_cmds = action[:4]
-        servo_angles_normalized = action[4:]    
+        thruster_cmds = action[:self.num_thrusters]
+        # servo_angles_normalized = action[4:]    
 
-        servo_angles_rad = [
-            self.convert_servo_command_to_radians(servo_angles_normalized[0]),
-            self.convert_servo_command_to_radians(servo_angles_normalized[1])
-        ]
+        # servo_angles_rad = [
+        #     self.convert_servo_command_to_radians(servo_angles_normalized[0]),
+        #     self.convert_servo_command_to_radians(servo_angles_normalized[1])
+        # ]
 
         # Store for reward calculation
         self.thruster_action = thruster_cmds
-        self.joint_angles = servo_angles_rad
+        # self.joint_angles = servo_angles_rad
         
         # Map to appropriate publishers
         #All DOFs
         thruster_mapping = [
-            ('heave_bow',  0.5 * thruster_cmds[2]),
-            ('heave_stern', 0.5 * thruster_cmds[3]),
-            ('surge_port',  0.0 * thruster_cmds[0]),
-            ('surge_starboard', 0.0 * thruster_cmds[1]),
-            ('port_servo', 0.0 *servo_angles_rad[0]),
-            ('starboard_servo',0.0 * servo_angles_rad[1])
+            ('heave_bow',  0.8 * thruster_cmds[0]),
+            ('heave_stern', 0.8 * thruster_cmds[1])
+            # ('surge_port',  0.0 * thruster_cmds[0]),
+            # ('surge_starboard', 0.0 * thruster_cmds[1]),
+            # ('port_servo', 0.0 *servo_angles_rad[0]),
+            # ('starboard_servo',0.0 * servo_angles_rad[1])
         ]
 
         # Publish commands
@@ -378,9 +380,9 @@ class DDPG_ROS(Node):
 
         # Servo smoothness penalty using sine and cosine components
         servo_smoothness_penalty = 0
-        delta_theta = np.zeros(2)
+        delta_theta = np.zeros(self.num_servos)
 
-        for i in range(2):
+        for i in range(self.num_servos):
             # Compute average sine and cosine of the historical angles
             avg_sin = np.average(np.sin(self.joint_positions_history[:, i]))
             avg_cos = np.average(np.cos(self.joint_positions_history[:, i]))
@@ -400,8 +402,8 @@ class DDPG_ROS(Node):
         # Thruster usage penalty
         u_t = np.array([
             self.thrust_heave_bow,
-            self.thrust_surge_port,
-            self.thrust_surge_starboard,
+            # self.thrust_surge_port,
+            # self.thrust_surge_starboard,
             self.thrust_heave_stern
         ])
         thruster_usage_penalty = np.sum(np.abs(u_t))
@@ -430,6 +432,7 @@ class DDPG_ROS(Node):
             self.thruster_command_action_prev[1:],  # Keep all except the first
             self.thruster_action  # Add the newest action
         ))
+
         thruster_action_penalty = np.sum(self.thruster_action - np.average(self.thruster_command_action_prev, axis=0))
         # Debugging output (optional)
         # print("Thruster Action Penalty:", self.thruster_command_action_prev)

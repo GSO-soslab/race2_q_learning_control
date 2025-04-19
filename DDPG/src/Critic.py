@@ -111,7 +111,7 @@ class Critic(nn.Module):
         
         # Output layer
         self.output_layer = nn.Linear(hidden_dims[-1], 1)
-        self.output_activation = nn.Tanh()
+        # self.output_activation = nn.Tanh()
         
         # Initialize weights
         self._initialize_weights()
@@ -137,6 +137,7 @@ class Critic(nn.Module):
         # Process through network
         x = self.input_activation(self.input_norm(self.input_layer(x)))
         x = self.hidden_layers(x)
-        x = self.output_activation(self.output_layer(x))
+        # x = self.output_activation(self.output_layer(x))
+        x = self.output_layer(x) 
         
         return x

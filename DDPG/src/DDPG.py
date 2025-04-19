@@ -43,8 +43,8 @@ class DDPG:
         print(f"Critic weight change: {critic_change:.8f}")
 
         # Initialize optimizers
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=1e-5)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=1e-3)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=1e-4)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=1e-4)
         
         # Initialize replay buffer (modified to store both actor and critic states)
         self.buffer = ReplayBuffer(actor_state_dim, critic_state_dim)
@@ -60,7 +60,7 @@ class DDPG:
         self.tau = 0.001 # Target network update rate (0.01 for depth only)
 
 
-    def update_learning_rates(self, episode, avg_recent_rewards, decay_factor=0.5, patience=100):
+    def update_learning_rates(self, episode, avg_recent_rewards, decay_factor=0.5, patience=100000):
         """
         Reduce learning rate when performance plateaus
         """
