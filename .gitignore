@@ -8,7 +8,7 @@
 
 # User-specific stuff
 .idea
-
+DDPG/src/checkpoints/*
 # Gradle
 .idea/**/gradle.xml
 .idea/**/libraries

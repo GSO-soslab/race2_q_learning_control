@@ -133,7 +133,8 @@ class DDPG:
         # Update critic
         with torch.no_grad():
             next_actions = self.actor_target(next_actor_states)
-            next_q_values = self.critic_target(next_critic_states, next_actions)
+            # next_q_values = self.critic_target(next_critic_states, next_actions)
+            next_q_values = self.critic(critic_states, actions)
             target_q = rewards + self.gamma * next_q_values * (1 - dones)
             # print("Target Q Values!!!", target_q)
         

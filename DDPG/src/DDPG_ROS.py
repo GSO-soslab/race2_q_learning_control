@@ -19,8 +19,8 @@ class DDPG_ROS(Node):
         self.config = config
 
         # Define separate dimensions for actor and critic
-        self.actor_state_dim = 2   # Example: position_err, v_err, orientation_err
-        self.critic_state_dim = 4  # error states + commands
+        self.actor_state_dim = 4   # Example: position_err, v_err, orientation_err
+        self.critic_state_dim = 6  # error states + commands
         self.action_dim = 2  # 4 thrusters + 2 servo angles
         self.action_bound = 1.0  # All commands between -1 and 1
         
@@ -97,7 +97,7 @@ class DDPG_ROS(Node):
         # Training parameters
         self.declare_parameter('training_mode', True)
         self.declare_parameter('max_steps', 500)
-        self.declare_parameter('model_path', '')
+        self.declare_parameter('model_path', '/home/soslab/race2_ws/src/race2_q_learning_control/DDPG/src/checkpoints/session_20250421_130624/ddpg_auv_model_ep770.pt')
         
         self.declare_parameter('max_episodes', 10000)  # Default 1000 episodes
         self.max_episodes = self.get_parameter('max_episodes').value
@@ -207,8 +207,6 @@ class DDPG_ROS(Node):
         if hasattr(self, 'last_action_timestamp') and self.last_state_timestamp > self.last_action_timestamp:
             self.new_state_available = True
 
-
-
     def setpoint_callback(self, data):
         """Process setpoint updates"""
         self.position_setpoint = np.array([data.position.x, data.position.y, data.position.z])
@@ -224,6 +222,8 @@ class DDPG_ROS(Node):
 
     def error_callback(self, data):
         """Process error updates"""
+
+        self.last_error_timestamp = time.time()
         self.position_err = np.array([data.position.x, data.position.y, data.position.z])
         self.orientation_err = np.array([data.orientation.x, data.orientation.y, data.orientation.z])
         self.v_err = np.array([data.velocity.x, data.velocity.y, data.velocity.z])
@@ -236,8 +236,8 @@ class DDPG_ROS(Node):
         self.omega_ref_err[:3],
         ])
 
-        # if hasattr(self, 'last_action_timestamp') and self.last_state_timestamp > self.last_action_timestamp:
-        #     self.new_state_available = True
+        if hasattr(self, 'last_action_timestamp') and self.last_error_timestamp > self.last_action_timestamp:
+            self.new_error_available = True
         # Update errors after setpoint changes
         # self.update_errors()
 
@@ -358,6 +358,7 @@ class DDPG_ROS(Node):
         
         # Reset the new state flag since we're waiting for a new state after this action
         self.new_state_available = False
+        self.new_error_available = False
 
     def calculate_reward(self, prev_state, current_state):
         """Calculate reward based on specified error components"""
@@ -468,6 +469,8 @@ class DDPG_ROS(Node):
 
         if not hasattr(self, 'new_state_available'):
             self.new_state_available = False
+        if not hasattr(self, 'new_error_available'):
+            self.new_error_available = False 
         if not hasattr(self, 'last_action_timestamp'):
             self.last_action_timestamp = 0
         
@@ -500,14 +503,14 @@ class DDPG_ROS(Node):
             # sway_error,       
             # heave_error,     
             # roll_error, 
-            # pitch_error, 
+            pitch_error, 
             # yaw_error/np.pi,  
             depth,                      
             # surge, 
             # sway, 
             # heave,  
             # roll, 
-            # pitch, 
+            pitch, 
             # yaw /np.pi,           
             # roll_rate,
             # pitch_rate,
@@ -521,7 +524,7 @@ class DDPG_ROS(Node):
             # sway_error, 
             #heave_error,  
             # roll_error, 
-            # pitch_error, 
+            pitch_error, 
             # yaw_error/np.pi, 
             # roll_rate_error,
             # pitch_rate_error,
@@ -531,7 +534,7 @@ class DDPG_ROS(Node):
             # sway, 
             # heave,  
             # roll,
-            # pitch,
+            pitch,
             # yaw /np.pi,           
             # roll_rate,
             # pitch_rate,
@@ -559,7 +562,7 @@ class DDPG_ROS(Node):
         # If in training mode, generate reward and train
         if (self.training_mode and self.prev_actor_state is not None and 
                 self.prev_critic_state is not None and self.prev_action is not None and 
-                self.new_state_available):
+                self.new_state_available and self.new_error_available):
             reward = self.calculate_reward(self.prev_critic_state, critic_state)
             # Ensure reward is a scalar value
             if isinstance(reward, np.ndarray):

@@ -56,7 +56,7 @@ reward_function:
       0.0,  # sway
       # 0.0,  # heave
       0.0,  # roll
-      0.0,  # pitch
+      0.015,  # pitch
       0.0  # yaw
       # 0.0,  # angular_vel_x
       # 0.0,  # angular_vel_y
