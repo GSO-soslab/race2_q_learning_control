@@ -25,7 +25,7 @@ class Actor(nn.Module):
         for hidden_dim in hidden_dims:
             layers.append(nn.Linear(current_dim, hidden_dim))
             layers.append(nn.LayerNorm(hidden_dim))
-            layers.append(nn.LeakyReLU())
+            layers.append(nn.ReLU())
             current_dim = hidden_dim
         
         # Create network

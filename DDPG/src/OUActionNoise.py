@@ -1,10 +1,10 @@
 import numpy as np
 
 class OUActionNoise:
-    def __init__(self, mean, std_deviation, theta=0.15, dt=1e-2, x0=None, decay_period=100000):
+    def __init__(self, mean, std_deviation, theta=0.2, dt=1e-2, x0=None, decay_period=100000):
         self.theta = theta
         self.mean = mean
-        self.std_dev = std_deviation
+        # self.std_dev = std_deviation
         self.dt = dt
         self.x0 = x0
         self.reset()
@@ -35,5 +35,5 @@ class OUActionNoise:
         self.step_count += 1
         if self.step_count <= self.decay_period:
             # Linear decay
-            decay_factor = 1.0 - (self.step_count / self.decay_period) * (1.0 - self.min_std / self.initial_std)
+            decay_factor = 1.0 # - (self.step_count / self.decay_period) * (1.0 - self.min_std / self.initial_std)
             self.std_dev = self.initial_std * decay_factor

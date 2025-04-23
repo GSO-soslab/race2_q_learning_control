@@ -19,8 +19,8 @@ class DDPG_ROS(Node):
         self.config = config
 
         # Define separate dimensions for actor and critic
-        self.actor_state_dim = 4   # Example: position_err, v_err, orientation_err
-        self.critic_state_dim = 6  # error states + commands
+        self.actor_state_dim = 12   # Example: position_err, v_err, orientation_err
+        self.critic_state_dim = 14  # error states + commands
         self.action_dim = 2  # 4 thrusters + 2 servo angles
         self.action_bound = 1.0  # All commands between -1 and 1
         
@@ -97,8 +97,9 @@ class DDPG_ROS(Node):
         # Training parameters
         self.declare_parameter('training_mode', True)
         self.declare_parameter('max_steps', 500)
-        self.declare_parameter('model_path', '/home/soslab/race2_ws/src/race2_q_learning_control/DDPG/src/checkpoints/session_20250421_130624/ddpg_auv_model_ep770.pt')
-        
+        # self.declare_parameter('model_path', '/home/soslab/race2_ws/src/race2_q_learning_control/DDPG/src/checkpoints/session_20250421_130624/ddpg_auv_model_ep770.pt')
+        # self.declare_parameter('model_path', '/home/farhang/race2_ws/src/race2_q_learning_control/DDPG/src/checkpoints/session_20250422_191702/ddpg_auv_model_ep1300.pt')
+        self.declare_parameter('model_path', '')
         self.declare_parameter('max_episodes', 10000)  # Default 1000 episodes
         self.max_episodes = self.get_parameter('max_episodes').value
 
@@ -499,19 +500,19 @@ class DDPG_ROS(Node):
 
         actor_state = np.concatenate([
             depth_error,               
-            # surge_error,    
-            # sway_error,       
+            surge_error,    
+            sway_error,       
             # heave_error,     
-            # roll_error, 
+            roll_error, 
             pitch_error, 
-            # yaw_error/np.pi,  
+            yaw_error,  
             depth,                      
-            # surge, 
-            # sway, 
+            surge, 
+            sway, 
             # heave,  
-            # roll, 
+            roll, 
             pitch, 
-            # yaw /np.pi,           
+            yaw,           
             # roll_rate,
             # pitch_rate,
             # yaw_rate,
@@ -520,22 +521,22 @@ class DDPG_ROS(Node):
         # Create critic state by concatenating the components you want
         critic_state = np.concatenate([
             depth_error,                 
-            # surge_error,
-            # sway_error, 
-            #heave_error,  
-            # roll_error, 
+            surge_error,
+            sway_error, 
+            # heave_error,  
+            roll_error, 
             pitch_error, 
-            # yaw_error/np.pi, 
+            yaw_error, 
             # roll_rate_error,
             # pitch_rate_error,
             # yaw_rate_error,
             depth,                      
-            # surge, 
-            # sway, 
+            surge, 
+            sway, 
             # heave,  
-            # roll,
+            roll,
             pitch,
-            # yaw /np.pi,           
+            yaw,           
             # roll_rate,
             # pitch_rate,
             # yaw_rate,
@@ -690,7 +691,7 @@ class DDPG_ROS(Node):
         yaw_error_exceeded = abs(float(yaw_error)) > (10 * np.pi / 180)  # Convert 10 degrees to radians
         
         # Episode terminates if time limit, step limit, or yaw error is exceeded
-        done = time_limit_exceeded #or yaw_error_exceeded #or step_limit_exceeded
+        done = step_limit_exceeded # or time_limit_exceeded #or yaw_error_exceeded #or 
 
         self.current_episode += 1
         self.step_counter = 0

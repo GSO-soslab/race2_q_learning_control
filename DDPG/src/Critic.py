@@ -98,14 +98,14 @@ class Critic(nn.Module):
         # Input layer takes both state and action as input
         self.input_layer = nn.Linear(state_dim + action_dim, hidden_dims[0])
         self.input_norm = nn.LayerNorm(hidden_dims[0])
-        self.input_activation = nn.LeakyReLU()
+        self.input_activation = nn.ReLU()
         
         # Hidden layers
         hidden_layers = []
         for i in range(len(hidden_dims) - 1):
             hidden_layers.append(nn.Linear(hidden_dims[i], hidden_dims[i+1]))
             hidden_layers.append(nn.LayerNorm(hidden_dims[i+1]))
-            hidden_layers.append(nn.LeakyReLU())
+            hidden_layers.append(nn.ReLU())
         
         self.hidden_layers = nn.Sequential(*hidden_layers)
         
