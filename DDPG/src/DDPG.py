@@ -186,8 +186,8 @@ class DDPG:
             # Get actions for next states using target actor
             next_actions = self.actor_target.forward(next_actor_states)
             # Get Q values for next states and actions using target critic
-            # next_q_values = self.critic_target.forward(next_critic_states, next_actions)
-            next_q_values = self.critic.forward(critic_states,actions)
+            next_q_values = self.critic_target.forward(next_critic_states, next_actions)
+            # next_q_values = self.critic.forward(critic_states,actions)
             
             # Calculate target Q values
             target_q = []

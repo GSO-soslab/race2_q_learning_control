@@ -20,7 +20,7 @@ class DDPG_ROS(Node):
 
         # Define separate dimensions for actor and critic
         self.actor_state_dim = 12   # Example: position_err, v_err, orientation_err
-        self.critic_state_dim = 14  # error states + commands
+        self.critic_state_dim = 12  # error states + commands
         self.action_dim = 2  # 4 thrusters + 2 servo angles
         self.action_bound = 1.0  # All commands between -1 and 1
         
@@ -96,7 +96,7 @@ class DDPG_ROS(Node):
         
         # Training parameters
         self.declare_parameter('training_mode', True)
-        self.declare_parameter('max_steps', 500)
+        self.declare_parameter('max_steps', 100)
         # self.declare_parameter('model_path', '/home/soslab/race2_ws/src/race2_q_learning_control/DDPG/src/checkpoints/session_20250421_130624/ddpg_auv_model_ep770.pt')
         # self.declare_parameter('model_path', '/home/farhang/race2_ws/src/race2_q_learning_control/DDPG/src/checkpoints/session_20250422_191702/ddpg_auv_model_ep1300.pt')
         self.declare_parameter('model_path', '')
@@ -184,7 +184,7 @@ class DDPG_ROS(Node):
         self.episode_reward = 0
         
         # Create timer for control loop
-        self.timer = self.create_timer(1/10, self.control_loop)  # 100 Hz control loop
+        self.timer = self.create_timer(0.05, self.control_loop)  # 100 Hz control loop
         
     def state_callback(self, data):
         """Process state updates from sensors"""
@@ -463,11 +463,12 @@ class DDPG_ROS(Node):
         # print(f"Thruster action penalty: {w7 * thruster_action_penalty}")
         # print(reward)
         return reward
+    
     def check_if_stuck(model, name="Network"): print(f"{name} weight change: {sum(p.grad.abs().mean().item() if p.grad is not None else 0 for p in model.parameters()):.8f}")
     
     def control_loop(self):
         """Main control loop using separate state inputs for actor and critic"""
-
+        
         if not hasattr(self, 'new_state_available'):
             self.new_state_available = False
         if not hasattr(self, 'new_error_available'):
@@ -498,7 +499,7 @@ class DDPG_ROS(Node):
         pitch_rate_error = self.omega_ref_err[1:2] 
         yaw_rate_error = self.omega_ref_err[2:3]
 
-        actor_state = np.concatenate([
+        self.actor_state = np.concatenate([
             depth_error,               
             surge_error,    
             sway_error,       
@@ -519,40 +520,34 @@ class DDPG_ROS(Node):
         ])
 
         # Create critic state by concatenating the components you want
-        critic_state = np.concatenate([
-            depth_error,                 
-            surge_error,
-            sway_error, 
-            # heave_error,  
-            roll_error, 
-            pitch_error, 
-            yaw_error, 
-            # roll_rate_error,
-            # pitch_rate_error,
-            # yaw_rate_error,
-            depth,                      
-            surge, 
-            sway, 
-            # heave,  
-            roll,
-            pitch,
-            yaw,           
-            # roll_rate,
-            # pitch_rate,
-            # yaw_rate,
-            # self.joint_angles,           
-            np.array([                  
-                self.thrust_heave_bow,
-                # self.thrust_surge_port,
-                # self.thrust_surge_starboard,
-                self.thrust_heave_stern
-            ])
-        ])
+        self.critic_state = self.actor_state
+        # critic_state = np.concatenate([
+        #     depth_error,                 
+        #     surge_error,
+        #     sway_error, 
+        #     # heave_error,  
+        #     roll_error, 
+        #     pitch_error, 
+        #     yaw_error, 
+        #     # roll_rate_error,
+        #     # pitch_rate_error,
+        #     # yaw_rate_error,
+        #     depth,                      
+        #     surge, 
+        #     sway, 
+        #     # heave,  
+        #     roll,
+        #     pitch,
+        #     yaw,           
+        #     # roll_rate,
+        #     # pitch_rate,
+        #     # yaw_rate,
+        #     # self.joint_angles,           
+        # ])
 
         # Get action from agent based on actor state only
-        action = self.agent.get_action(actor_state, add_noise=self.training_mode)
+        action = self.agent.get_action(self.actor_state, add_noise=self.training_mode)
         action = np.reshape(action, -1) 
-
         
         # Calculate current time if episode_start_time is not set
         if not hasattr(self, 'episode_start_time') or self.episode_start_time is None:
@@ -561,30 +556,82 @@ class DDPG_ROS(Node):
         done = False
 
         # If in training mode, generate reward and train
-        if (self.training_mode and self.prev_actor_state is not None and 
-                self.prev_critic_state is not None and self.prev_action is not None and 
+        if (self.training_mode and 
                 self.new_state_available and self.new_error_available):
-            reward = self.calculate_reward(self.prev_critic_state, critic_state)
+
+            
+            # Publish thruster and servo commands
+
+
+            self.publish_action(action)
+            self.publish_time = time.time()
+            # Check if episode is done
+            done = self.is_done(self.critic_state)
+            time.sleep(0.1)
+
+            depth = self.position_state[2:3]
+            surge = self.v_state[0:1]     
+            sway = self.v_state[1:2]      
+            heave = self.v_state[2:3]        
+            roll = self.orientation_state[0:1]         
+            pitch = self.orientation_state[1:2]         
+            yaw = self.orientation_state[2:3]           
+
+            depth_error = self.position_err[2:3]        
+            surge_error = self.v_err[0:1]   
+            sway_error = self.v_err[1:2]       
+            heave_error = self.v_err[2:3]      
+            roll_error = self.orientation_err[0:1]     
+            pitch_error = self.orientation_err[1:2]     
+            yaw_error = self.orientation_err[2:3] 
+
+            next_actor_state = np.concatenate([
+            depth_error,               
+            surge_error,    
+            sway_error,       
+            # heave_error,     
+            roll_error, 
+            pitch_error, 
+            yaw_error,  
+            depth,                     
+            surge, 
+            sway, 
+            # heave,  
+            roll, 
+            pitch, 
+            yaw,           
+            # roll_rate,
+            # pitch_rate,
+            # yaw_rate,
+            ])
+            next_critic_state = next_actor_state
+            # Store in replay buffer with separate states
+            # self.agent.remember(
+            #     self.prev_actor_state, 
+            #     self.prev_critic_state, 
+            #     self.prev_action, 
+            #     reward, 
+            #     actor_state, 
+            #     critic_state, 
+            #     done
+            # )
+
+            reward = self.calculate_reward(self.critic_state, next_critic_state)
             # Ensure reward is a scalar value
             if isinstance(reward, np.ndarray):
                 reward = float(reward.item())
             # Add reward to episode total
             self.episode_reward += reward
-            
-            # Check if episode is done
-            done = self.is_done(critic_state)
-            
-            # Store in replay buffer with separate states
+
             self.agent.remember(
-                self.prev_actor_state, 
-                self.prev_critic_state, 
-                self.prev_action, 
+                self.actor_state, 
+                self.critic_state, 
+                action, 
                 reward, 
-                actor_state, 
-                critic_state, 
+                next_actor_state, 
+                next_critic_state, 
                 done
             )
-
             # Train agent
             # critic_loss, actor_loss, reward_value, current_q_value = self.agent.learn()    #old version
             result = self.agent.learn()
@@ -603,8 +650,8 @@ class DDPG_ROS(Node):
             # When in inference mode, still check if episode is done
             done = self.is_done(critic_state)
             
-        # Publish thruster and servo commands
-        self.publish_action(action)
+        # # Publish thruster and servo commands
+        # self.publish_action(action)
 
         # Update episode step counter
         self.episode_step += 1
@@ -670,15 +717,16 @@ class DDPG_ROS(Node):
             self.episode_start_time = time.time()
         
         # Store state and action for next training step
-        self.prev_actor_state = actor_state.copy()
-        self.prev_critic_state = critic_state.copy()
-        self.prev_action = action
+        # self.prev_actor_state = actor_state.copy()
+        # self.prev_critic_state = critic_state.copy()
+        # self.prev_action = action
+        # print(self.prev_action)
 
     def is_done(self, state):
         """Check if episode should terminate based on time/step limits only"""
         
         # Time-based termination
-        max_time = self.config['training']['max_t']  # Max allowed episode duration (seconds)
+        max_time = self.config['training']['max_t']  # Max allowed episode duration
         elapsed_time = time.time() - self.episode_start_time  # Calculate elapsed time
         time_limit_exceeded = elapsed_time >= max_time
 
