@@ -9,6 +9,8 @@
 # User-specific stuff
 .idea
 DDPG/src/checkpoints/*
+spinup/auv_venv
+spinup/results 
 # Gradle
 .idea/**/gradle.xml
 .idea/**/libraries

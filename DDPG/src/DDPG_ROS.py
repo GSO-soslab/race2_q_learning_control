@@ -95,16 +95,24 @@ class DDPG_ROS(Node):
                                 10)
         
         # Training parameters
+        self.declare_parameter('checkpoints_save_period', 100)
+        self.checkpoints_save_period = self.get_parameter('checkpoints_save_period').value
+        
         self.declare_parameter('training_mode', True)
         self.declare_parameter('max_steps', 100)
+        self.max_steps = self.get_parameter('max_steps').value
+        
+        self.declare_parameter('reward_history_window_size', self.max_steps)
+        self.reward_history_window_size = self.get_parameter('reward_history_window_size').value
         # self.declare_parameter('model_path', '/home/soslab/race2_ws/src/race2_q_learning_control/DDPG/src/checkpoints/session_20250421_130624/ddpg_auv_model_ep770.pt')
         # self.declare_parameter('model_path', '/home/farhang/race2_ws/src/race2_q_learning_control/DDPG/src/checkpoints/session_20250422_191702/ddpg_auv_model_ep1300.pt')
+        # self.declare_parameter('model_path', '/home/farhang/race2_ws/src/race2_q_learning_control/DDPG/src/checkpoints/session_20250424_172104/ddpg_auv_model_ep20.pt')
+
         self.declare_parameter('model_path', '')
-        self.declare_parameter('max_episodes', 10000)  # Default 1000 episodes
+        self.declare_parameter('max_episodes', 700)  # Default 1000 episodes
         self.max_episodes = self.get_parameter('max_episodes').value
 
         self.training_mode = self.get_parameter('training_mode').value
-        self.max_steps = self.get_parameter('max_steps').value
         model_path = self.get_parameter('model_path').value
         
         # State tracking
@@ -454,14 +462,14 @@ class DDPG_ROS(Node):
             w8 * direction_change_penalty
         )
         
-        # print(f"Performance Error Contribution: {-w1 * performance_error}")
-        # print(f"Servo Smoothness Penalty Contribution: {-w2 * servo_smoothness_penalty}")
-        # print(f"Thruster Usage Penalty Contribution: {-w3 * thruster_usage_penalty}")
-        # print(f"Thruster Smoothness Penalty Contribution: {-w4 * thruster_smoothness_penalty}")
-        # print(f"Servo Angle Penalty Contribution: {-w5 * servo_angle_penalty}")
-        # print(f"Thruster Delta Reward Contribution: {-w6 * thruster_delta_reward}")
-        # print(f"Thruster action penalty: {w7 * thruster_action_penalty}")
-        # print(reward)
+        # self.get_logger().info(f"Performance Error Contribution: {-w1 * performance_error}")
+        # self.get_logger().info(f"Servo Smoothness Penalty Contribution: {-w2 * servo_smoothness_penalty}")
+        # self.get_logger().info(f"Thruster Usage Penalty Contribution: {-w3 * thruster_usage_penalty}")
+        # self.get_logger().info(f"Thruster Smoothness Penalty Contribution: {-w4 * thruster_smoothness_penalty}")
+        # self.get_logger().info(f"Servo Angle Penalty Contribution: {-w5 * servo_angle_penalty}")
+        # self.get_logger().info(f"Thruster Delta Reward Contribution: {-w6 * thruster_delta_reward}")
+        # self.get_logger().info(f"Thruster action penalty: {w7 * thruster_action_penalty}")
+        # self.get_logger().info(f"Reward: {reward}")
         return reward
     
     def check_if_stuck(model, name="Network"): print(f"{name} weight change: {sum(p.grad.abs().mean().item() if p.grad is not None else 0 for p in model.parameters()):.8f}")
@@ -469,13 +477,24 @@ class DDPG_ROS(Node):
     def control_loop(self):
         """Main control loop using separate state inputs for actor and critic"""
         
+        # Initialize attributes if needed
         if not hasattr(self, 'new_state_available'):
             self.new_state_available = False
         if not hasattr(self, 'new_error_available'):
             self.new_error_available = False 
         if not hasattr(self, 'last_action_timestamp'):
             self.last_action_timestamp = 0
+        if not hasattr(self, 'episode_start_time') or self.episode_start_time is None:
+            self.episode_start_time = time.time()
+        if not hasattr(self, 'recent_rewards'):
+            self.recent_rewards = []
+        if not hasattr(self, 'session_id') and self.training_mode:
+            self.session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.checkpoint_dir = os.path.join("checkpoints", f"session_{self.session_id}")
+            os.makedirs(self.checkpoint_dir, exist_ok=True)
+            self.get_logger().info(f"Created checkpoint directory: {self.checkpoint_dir}")
         
+        # Extract state variables
         depth = self.position_state[2:3]
         surge = self.v_state[0:1]     
         sway = self.v_state[1:2]      
@@ -484,6 +503,7 @@ class DDPG_ROS(Node):
         pitch = self.orientation_state[1:2]         
         yaw = self.orientation_state[2:3]           
 
+        # Extract error variables
         depth_error = self.position_err[2:3]        
         surge_error = self.v_err[0:1]   
         sway_error = self.v_err[1:2]       
@@ -492,6 +512,7 @@ class DDPG_ROS(Node):
         pitch_error = self.orientation_err[1:2]     
         yaw_error = self.orientation_err[2:3]    
 
+        # Extract rate variables
         roll_rate = self.omega_ref_state[0:1]
         pitch_rate = self.omega_ref_state[1:2]
         yaw_rate = self.omega_ref_state[2:3]
@@ -499,228 +520,147 @@ class DDPG_ROS(Node):
         pitch_rate_error = self.omega_ref_err[1:2] 
         yaw_rate_error = self.omega_ref_err[2:3]
 
+        # Create actor state
         self.actor_state = np.concatenate([
-            depth_error,               
-            surge_error,    
-            sway_error,       
-            # heave_error,     
+            depth_error, 
+            surge_error, 
+            sway_error, 
             roll_error, 
             pitch_error, 
             yaw_error,  
-            depth,                      
+            depth, 
             surge, 
             sway, 
-            # heave,  
             roll, 
             pitch, 
-            yaw,           
-            # roll_rate,
-            # pitch_rate,
-            # yaw_rate,
+            yaw           
         ])
 
-        # Create critic state by concatenating the components you want
+        # Use same state for critic
         self.critic_state = self.actor_state
-        # critic_state = np.concatenate([
-        #     depth_error,                 
-        #     surge_error,
-        #     sway_error, 
-        #     # heave_error,  
-        #     roll_error, 
-        #     pitch_error, 
-        #     yaw_error, 
-        #     # roll_rate_error,
-        #     # pitch_rate_error,
-        #     # yaw_rate_error,
-        #     depth,                      
-        #     surge, 
-        #     sway, 
-        #     # heave,  
-        #     roll,
-        #     pitch,
-        #     yaw,           
-        #     # roll_rate,
-        #     # pitch_rate,
-        #     # yaw_rate,
-        #     # self.joint_angles,           
-        # ])
-
-        # Get action from agent based on actor state only
+        
+        # Get action from agent
         action = self.agent.get_action(self.actor_state, add_noise=self.training_mode)
         action = np.reshape(action, -1) 
         
-        # Calculate current time if episode_start_time is not set
-        if not hasattr(self, 'episode_start_time') or self.episode_start_time is None:
-            self.episode_start_time = time.time()
+        # Publish action
+        self.publish_action(action)
+        self.publish_time = time.time()
+        
+        # Check if episode is done
+        done = self.is_done(self.critic_state)
 
-        done = False
+        # Training mode logic
+        time.sleep(0.1)
 
-        # If in training mode, generate reward and train
-        if (self.training_mode and 
-                self.new_state_available and self.new_error_available):
+        # Get updated state after action
+        updated_depth = self.position_state[2:3]
+        updated_surge = self.v_state[0:1]     
+        updated_sway = self.v_state[1:2]      
+        updated_heave = self.v_state[2:3]        
+        updated_roll = self.orientation_state[0:1]         
+        updated_pitch = self.orientation_state[1:2]         
+        updated_yaw = self.orientation_state[2:3]           
 
-            
-            # Publish thruster and servo commands
+        updated_depth_error = self.position_err[2:3]        
+        updated_surge_error = self.v_err[0:1]   
+        updated_sway_error = self.v_err[1:2]       
+        updated_heave_error = self.v_err[2:3]      
+        updated_roll_error = self.orientation_err[0:1]     
+        updated_pitch_error = self.orientation_err[1:2]     
+        updated_yaw_error = self.orientation_err[2:3] 
 
+        # Create next state
+        next_actor_state = np.concatenate([
+            updated_depth_error, 
+            updated_surge_error, 
+            updated_sway_error,
+            updated_roll_error, 
+            updated_pitch_error, 
+            updated_yaw_error,
+            updated_depth, 
+            updated_surge, 
+            updated_sway,
+            updated_roll, 
+            updated_pitch, 
+            updated_yaw
+        ])
+        next_critic_state = next_actor_state
+        
+        # Calculate reward
+        reward = self.calculate_reward(self.critic_state, next_critic_state)
+        if isinstance(reward, np.ndarray):
+            reward = float(reward.item())
+        
+        # Add to episode reward
+        self.episode_reward += reward
 
-            self.publish_action(action)
-            self.publish_time = time.time()
-            # Check if episode is done
-            done = self.is_done(self.critic_state)
-            time.sleep(0.1)
-
-            depth = self.position_state[2:3]
-            surge = self.v_state[0:1]     
-            sway = self.v_state[1:2]      
-            heave = self.v_state[2:3]        
-            roll = self.orientation_state[0:1]         
-            pitch = self.orientation_state[1:2]         
-            yaw = self.orientation_state[2:3]           
-
-            depth_error = self.position_err[2:3]        
-            surge_error = self.v_err[0:1]   
-            sway_error = self.v_err[1:2]       
-            heave_error = self.v_err[2:3]      
-            roll_error = self.orientation_err[0:1]     
-            pitch_error = self.orientation_err[1:2]     
-            yaw_error = self.orientation_err[2:3] 
-
-            next_actor_state = np.concatenate([
-            depth_error,               
-            surge_error,    
-            sway_error,       
-            # heave_error,     
-            roll_error, 
-            pitch_error, 
-            yaw_error,  
-            depth,                     
-            surge, 
-            sway, 
-            # heave,  
-            roll, 
-            pitch, 
-            yaw,           
-            # roll_rate,
-            # pitch_rate,
-            # yaw_rate,
-            ])
-            next_critic_state = next_actor_state
-            # Store in replay buffer with separate states
-            # self.agent.remember(
-            #     self.prev_actor_state, 
-            #     self.prev_critic_state, 
-            #     self.prev_action, 
-            #     reward, 
-            #     actor_state, 
-            #     critic_state, 
-            #     done
-            # )
-
-            reward = self.calculate_reward(self.critic_state, next_critic_state)
-            # Ensure reward is a scalar value
-            if isinstance(reward, np.ndarray):
-                reward = float(reward.item())
-            # Add reward to episode total
-            self.episode_reward += reward
-
-            self.agent.remember(
-                self.actor_state, 
-                self.critic_state, 
-                action, 
-                reward, 
-                next_actor_state, 
-                next_critic_state, 
-                done
-            )
-            # Train agent
-            # critic_loss, actor_loss, reward_value, current_q_value = self.agent.learn()    #old version
-            result = self.agent.learn()
-            if all(v is not None for v in result):
-                critic_loss, actor_loss, reward_value, current_q_value = result
-                self.publish_metrics(reward_value, current_q_value, actor_loss, critic_loss)
-                self.step_counter += 1        
-                self.get_logger().debug(f"Critic Loss: {critic_loss:.4f}, Actor Loss: {actor_loss:.4f}")
-            else:
-                print("Learn returned None — skipping training this step.")
-            
-            # if critic_loss is not None:
-
-                
-        elif not self.training_mode:
-            # When in inference mode, still check if episode is done
-            done = self.is_done(critic_state)
-            
-        # # Publish thruster and servo commands
-        # self.publish_action(action)
-
+        # Store experience in replay buffer
+        self.agent.remember(
+            self.actor_state, 
+            self.critic_state, 
+            action, 
+            reward, 
+            next_actor_state, 
+            next_critic_state, 
+            done
+        )
+        
+        # Train agent
+        result = self.agent.learn()
+        if all(v is not None for v in result):
+            critic_loss, actor_loss, reward_value, current_q_value = result
+            self.publish_metrics(reward_value, current_q_value, actor_loss, critic_loss)
+            self.step_counter += 1        
+            self.get_logger().debug(f"Critic Loss: {critic_loss:.4f}, Actor Loss: {actor_loss:.4f}")
+        else:
+            self.get_logger().debug("Learn returned None — skipping training this step.")
+        
         # Update episode step counter
         self.episode_step += 1
 
         # Check for episode end
         if done or self.episode_step >= self.max_steps:
             self.get_logger().info(f"Episode {self.episode_count} completed: Steps={self.episode_step}, Reward={self.episode_reward:.2f}")
-            self.episode_step = 0  # Reset step counter (you had self.episode_step = self.episode_step)
+            self.episode_step = 0
             self.episode_count += 1
             
-            #Learning rate update feature
-            # Track recent rewards for learning rate adjustment
-            if not hasattr(self, 'recent_rewards'):
-                self.recent_rewards = []
-            
+            # Learning rate update feature
             self.recent_rewards.append(self.episode_reward)
             
-            # Keep only last 10 rewards for moving average
-            if len(self.recent_rewards) > 10:
+            #keep rewards for moving average
+            if len(self.recent_rewards) >  self.reward_history_window_size:
                 self.recent_rewards.pop(0)
             
             # Calculate average reward
             avg_reward = sum(self.recent_rewards) / len(self.recent_rewards)
             
             # Update learning rates based on performance
-            lr_updated = self.agent.update_learning_rates(self.episode_count, avg_reward)
+            if self.training_mode:
+                lr_updated = self.agent.update_learning_rates(self.episode_count, avg_reward)
+                if lr_updated:
+                    self.get_logger().info(f"Episode {self.episode_count}: Learning rate decreased due to performance plateau")
             
-            if lr_updated:
-                self.get_logger().info(f"Episode {self.episode_count}: Learning rate decreased due to performance plateau")
-        
-            # Save model periodically
-            if self.episode_count % 10 == 0:
-                #     model_path = f"ddpg_auv_model_ep{self.episode_count}.pt"
-                #     self.agent.save_weights(model_path)
-                #     self.get_logger().info(f"Model saved to {model_path}")
-                
-                    # Create a session ID only once when the program starts
-                    if not hasattr(self, 'session_id'):
-                        self.session_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                        # Create the session directory
-                        self.checkpoint_dir = os.path.join("checkpoints", f"session_{self.session_id}")
-                        os.makedirs(self.checkpoint_dir, exist_ok=True)
-                        self.get_logger().info(f"Created checkpoint directory: {self.checkpoint_dir}")
-                    
-                    # Save the model in the session directory with incrementing episode numbers
+                # Save model periodically (only in training mode)
+                if self.episode_count % self.checkpoints_save_period == 0:
                     model_path = os.path.join(self.checkpoint_dir, f"ddpg_auv_model_ep{self.episode_count}.pt")
                     self.agent.save_weights(model_path)
                     self.get_logger().info(f"Model saved to {model_path}")
                 
-            if self.episode_count >= self.max_episodes:
-                self.get_logger().info(f"Reached maximum number of episodes ({self.max_episodes}). Training complete.")
-                final_model_path = "ddpg_auv_model_final.pt"
-                self.agent.save_weights(final_model_path)
-                self.get_logger().info(f"Final model saved to {final_model_path}")
-                # Load the saved model back for inference
-                self.agent.load_weights(final_model_path)
-                self.training_mode = False  # Stop training mode
-                self.get_logger().info("Switching to inference mode - controller will continue sending actions")
+                # Check if we've reached max episodes
+                if self.episode_count >= self.max_episodes:
+                    self.get_logger().info(f"Reached maximum number of episodes ({self.max_episodes}). Training complete.")
+                    final_model_path = "ddpg_auv_model_final.pt"
+                    self.agent.save_weights(final_model_path)
+                    self.get_logger().info(f"Final model saved to {final_model_path}")
+                    # Load the saved model back for inference
+                    self.agent.load_weights(final_model_path)
+                    self.training_mode = False
+                    self.get_logger().info("Switching to inference mode - controller will continue sending actions")
 
-            # Reset episode reward AFTER logging it
+            # Reset episode reward and start time
             self.episode_reward = 0
-            # Reset episode start time for the next episode
             self.episode_start_time = time.time()
-        
-        # Store state and action for next training step
-        # self.prev_actor_state = actor_state.copy()
-        # self.prev_critic_state = critic_state.copy()
-        # self.prev_action = action
-        # print(self.prev_action)
 
     def is_done(self, state):
         """Check if episode should terminate based on time/step limits only"""
@@ -736,7 +676,7 @@ class DDPG_ROS(Node):
 
         # Yaw error termination - terminate if yaw error exceeds 10 degrees
         yaw_error = self.orientation_err[2:3]
-        yaw_error_exceeded = abs(float(yaw_error)) > (10 * np.pi / 180)  # Convert 10 degrees to radians
+        # yaw_error_exceeded = abs(float(yaw_error)) > (10 * np.pi / 180)  # Convert 10 degrees to radians
         
         # Episode terminates if time limit, step limit, or yaw error is exceeded
         done = step_limit_exceeded # or time_limit_exceeded #or yaw_error_exceeded #or 
