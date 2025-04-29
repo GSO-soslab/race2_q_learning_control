@@ -261,7 +261,6 @@ class AUVEnv(gym.Env):
         reward = self.calculate_reward()
         if isinstance(reward, np.ndarray):
             reward = float(reward.item())
-
         self.episode_reward += reward
 
         # done = False
