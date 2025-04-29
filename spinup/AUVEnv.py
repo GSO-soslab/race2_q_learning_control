@@ -163,7 +163,6 @@ class AUVEnv(gym.Env):
 
     def reset(self):
         # Reset the environment to initial state
-        # This might involve sending reset commands to your ROS system
         # Return the initial observation
 
         self.episode_step = 0

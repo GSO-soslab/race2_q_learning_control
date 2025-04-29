@@ -320,7 +320,6 @@ def main():
                 episode_reward += reward
                 step += 1
                 
-                # Optional: add delay to match real-time execution
                 time.sleep(0.01)  # Small delay to not overwhelm ROS
                 
                 # Print step information
