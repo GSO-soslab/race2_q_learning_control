@@ -78,93 +78,93 @@ class RewardPlottingCallback(BaseCallback):
         
         return True
 
-class StableBaselinesMonitor(gym.Wrapper):
-    """
-    A monitor wrapper for Gym environments, custom version for SB3 compatibility.
-    """
-    def __init__(self, env, filename=None):
-        """
-        Args:
-            env: The environment to wrap
-            filename: The log filename
-        """
-        super().__init__(env=env)
-        self.t_start = time.time()
-        self.rewards = []
-        self.episode_rewards = []
-        self.episode_lengths = []
-        self.total_steps = 0
-        self.current_episode_reward = 0
-        self.current_episode_length = 0
+# class StableBaselinesMonitor(gym.Wrapper):
+#     """
+#     A monitor wrapper for Gym environments, custom version for SB3 compatibility.
+#     """
+#     def __init__(self, env, filename=None):
+#         """
+#         Args:
+#             env: The environment to wrap
+#             filename: The log filename
+#         """
+#         super().__init__(env=env)
+#         self.t_start = time.time()
+#         self.rewards = []
+#         self.episode_rewards = []
+#         self.episode_lengths = []
+#         self.total_steps = 0
+#         self.current_episode_reward = 0
+#         self.current_episode_length = 0
         
-        if filename:
-            self.file_handler = open(filename, "wt")
-            self.file_handler.write("r,l,t\n")
-        else:
-            self.file_handler = None
+#         if filename:
+#             self.file_handler = open(filename, "wt")
+#             self.file_handler.write("r,l,t\n")
+#         else:
+#             self.file_handler = None
             
-    def reset(self, **kwargs):
-        """
-        Reset the environment
-        """
-        if self.current_episode_length > 0:
-            self.episode_rewards.append(self.current_episode_reward)
-            self.episode_lengths.append(self.current_episode_length)
-            if self.file_handler:
-                self.file_handler.write(f"{self.current_episode_reward},{self.current_episode_length},{time.time() - self.t_start}\n")
+#     def reset(self, **kwargs):
+#         """
+#         Reset the environment
+#         """
+#         if self.current_episode_length > 0:
+#             self.episode_rewards.append(self.current_episode_reward)
+#             self.episode_lengths.append(self.current_episode_length)
+#             if self.file_handler:
+#                 self.file_handler.write(f"{self.current_episode_reward},{self.current_episode_length},{time.time() - self.t_start}\n")
         
-        self.current_episode_reward = 0
-        self.current_episode_length = 0
-        return self.env.reset()
+#         self.current_episode_reward = 0
+#         self.current_episode_length = 0
+#         return self.env.reset()
     
-    def step(self, action):
-        """
-        Step the environment
-        """
-        obs, reward, terminated, truncated, info = self.env.step(action)
-        done = terminated or truncated
-        self.rewards.append(reward)
-        self.current_episode_reward += reward
-        self.current_episode_length += 1
-        self.total_steps += 1
+#     def step(self, action):
+#         """
+#         Step the environment
+#         """
+#         obs, reward, terminated, truncated, info = self.env.step(action)
+#         done = terminated or truncated
+#         self.rewards.append(reward)
+#         self.current_episode_reward += reward
+#         self.current_episode_length += 1
+#         self.total_steps += 1
         
-        if done:
-            self.episode_rewards.append(self.current_episode_reward)
-            self.episode_lengths.append(self.current_episode_length)
-            if self.file_handler:
-                self.file_handler.write(f"{self.current_episode_reward},{self.current_episode_length},{time.time() - self.t_start}\n")
-                self.file_handler.flush()
+#         if done:
+#             self.episode_rewards.append(self.current_episode_reward)
+#             self.episode_lengths.append(self.current_episode_length)
+#             if self.file_handler:
+#                 self.file_handler.write(f"{self.current_episode_reward},{self.current_episode_length},{time.time() - self.t_start}\n")
+#                 self.file_handler.flush()
             
-            info['episode'] = {
-                'r': self.current_episode_reward,
-                'l': self.current_episode_length,
-                't': time.time() - self.t_start
-            }
+#             info['episode'] = {
+#                 'r': self.current_episode_reward,
+#                 'l': self.current_episode_length,
+#                 't': time.time() - self.t_start
+#             }
             
-            self.current_episode_reward = 0
-            self.current_episode_length = 0
+#             self.current_episode_reward = 0
+#             self.current_episode_length = 0
             
-        return obs, reward, done, info
+#         return obs, reward, done, info
     
-    def close(self):
-        """
-        Close the environment
-        """
-        if self.file_handler:
-            self.file_handler.close()
-        super().close()
+#     def close(self):
+#         """
+#         Close the environment
+#         """
+#         if self.file_handler:
+#             self.file_handler.close()
+#         super().close()
         
-    def get_episode_rewards(self):
-        """
-        Get episode rewards
-        """
-        return self.episode_rewards
+#     def get_episode_rewards(self):
+#         """
+#         Get episode rewards
+#         """
+#         return self.episode_rewards
         
-    def get_episode_lengths(self):
-        """
-        Get episode lengths
-        """
-        return self.episode_lengths
+#     def get_episode_lengths(self):
+#         """
+#         Get episode lengths
+#         """
+#         return self.episode_lengths
 
 def load_config(config_path):
     """Load configuration from YAML file"""
@@ -196,7 +196,7 @@ def main():
     
     # Limit episode length
     max_episode_steps = config['training']['max_t']
-    env = TimeLimit(env, max_episode_steps=max_episode_steps)
+    # env = TimeLimit(env, max_episode_steps=max_episode_steps)
     
     # Set up logging directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -204,7 +204,7 @@ def main():
     os.makedirs(log_dir, exist_ok=True)
     
     # Use our custom monitor instead of SB3's Monitor which requires gymnasium
-    env = StableBaselinesMonitor(env, filename=os.path.join(log_dir, "monitor.csv"))
+    # env = StableBaselinesMonitor(env, filename=os.path.join(log_dir, "monitor.csv"))
     
     if args.mode == 'train':
         # Set up noise for exploration
@@ -244,6 +244,7 @@ def main():
             batch_size=batch_size,
             tau=tau,
             gamma=gamma,
+            seed = random_seed,
             policy_kwargs=policy_kwargs,
             verbose=1,
             tensorboard_log=log_dir
@@ -277,7 +278,7 @@ def main():
         print(f"Learning rate: {learning_rate}, Buffer size: {buffer_size}")
         print(f"Actor network: {config['qnetwork']['actor_hidden_layers']}")
         print(f"Critic network: {config['qnetwork']['critic_hidden_layers']}")
-        
+        print(policy_kwargs)
         try:
             model.learn(
                 total_timesteps=total_timesteps,
