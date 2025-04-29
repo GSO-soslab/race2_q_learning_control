@@ -51,7 +51,7 @@ noise_sigma = config['agent']['epsilon_initial']
 action_noise = OrnsteinUhlenbeckActionNoise(
     mean=np.zeros(n_actions),
     sigma=noise_sigma * np.ones(n_actions),
-    theta=0.15  # Default OU process parameter
+    theta=0.05  # Default OU process parameter
 )
 
 
@@ -87,12 +87,12 @@ model = DDPG(
     tensorboard_log=log_dir
 )
 
-model.learn(total_timesteps=400000)
+model.learn(total_timesteps=4000)
 model.save("ddpg_race2_auv")
 
 del model # remove to demonstrate saving and loading
 
-model = DDPG.load("ddpg_mountain")
+model = DDPG.load("ddpg_race2_auv")
 
 obs = env.reset()
 while True:

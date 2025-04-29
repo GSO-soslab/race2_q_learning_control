@@ -265,7 +265,7 @@ class AUVEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=-np.inf, 
             high=np.inf, 
-            shape=(12,),  # state dimension
+            shape=(14,),  # state dimension
             dtype=np.float32
         )
         
@@ -287,7 +287,7 @@ class AUVEnv(gym.Env):
         """Reset the environment to initial state and return the initial observation"""
         # Process ROS events to ensure we have the latest state
         self._spin_node(timeout_sec=0.1)
-        
+
         if seed is not None:
             np.random.seed(seed)
         
@@ -316,13 +316,15 @@ class AUVEnv(gym.Env):
         initial_observation = np.concatenate([
             depth_error, 
             surge_error, 
-            sway_error, 
+            sway_error,
+            heave_error, 
             roll_error, 
             pitch_error, 
             yaw_error,  
             depth, 
             surge, 
-            sway, 
+            sway,
+            heave, 
             roll, 
             pitch, 
             yaw           
@@ -375,12 +377,14 @@ class AUVEnv(gym.Env):
                 updated_depth_error, 
                 updated_surge_error, 
                 updated_sway_error,
+                updated_heave_error,
                 updated_roll_error, 
                 updated_pitch_error, 
                 updated_yaw_error,
                 updated_depth, 
                 updated_surge, 
                 updated_sway,
+                updated_heave,
                 updated_roll, 
                 updated_pitch, 
                 updated_yaw
@@ -389,6 +393,7 @@ class AUVEnv(gym.Env):
                 updated_depth_error, 
                 updated_surge_error, 
                 updated_sway_error,
+                updated_heave_error,
                 updated_roll_error, 
                 updated_pitch_error, 
                 updated_yaw_error
@@ -397,7 +402,7 @@ class AUVEnv(gym.Env):
             terminated = False
         else: 
             print("Warning: No new state/error available, returning dummy observation")
-            observation = np.zeros(12)  # Dummy observation
+            observation = np.zeros(14)  # Dummy observation
             terminated = True 
         
         # Calculate reward
@@ -435,11 +440,25 @@ class AUVEnv(gym.Env):
         #     self.node.orientation_err[:3], # roll, pitch, yaw
         # ]).astype(np.float32)
         error = state_error_array
-        # Compute performance error (quadratic penalty)
-        error_column = error.reshape(-1, 1)
-        performance_error = np.dot(error, np.diag(state_error_weights))
-        performance_error = np.dot(performance_error, error_column)
+        # # Compute performance error (quadratic penalty)
+        # error_column = error.reshape(-1, 1)
+        # # performance_error = np.dot(error, np.diag(state_error_weights))
+        # # performance_error = np.dot(performance_error, error_column)
+        # # performance_error = np.exp(-performance_error)
+        # performance_error = error_column * np.diag(state_error_weights) * error
+        # print("PE",performance_error)
+        # performance_error = np.exp(-performance_error)
+        # print("Reward Error",performance_error)
+        error_column = error.reshape(-1, 1)  # Shape: (N,1)
+        error_row = error.reshape(1, -1)     # Shape: (1,N)
+        weights_diag = np.diag(state_error_weights)  # Shape: (N,N)
+        # print(error_column.shape)
+        # print(error_row.shape)
+        # print(weights_diag.shape)
+        
+        performance_error = error_row @ weights_diag @ error_column
         performance_error = np.exp(-performance_error)
+        # print(performance_error)
 
         # Servo smoothness penalty using sine and cosine components
         servo_smoothness_penalty = 0
