@@ -40,7 +40,7 @@ class CustomSetPointPublisher(Node):
         )
         
         # Declare parameters with default values
-        self.declare_parameter('random_duration',20.0)
+        self.declare_parameter('random_duration',80.0)
         self.declare_parameter('rate_hz', 10.0)
         self.declare_parameter('enable_resets', False)
         self.declare_parameter('reset_interval',2.0)
@@ -75,7 +75,7 @@ class CustomSetPointPublisher(Node):
         self.stable_angular_rate = Vector3(x=0.0, y=0.0, z=0.0)
         
         # Random ranges for fields we want to vary
-        self.pos_z_min, self.pos_z_max = 0.0, 1.0
+        self.pos_z_min, self.pos_z_max = 2.0, 2.0
         self.ori_z_min, self.ori_z_max = -np.pi, np.pi
         self.vel_x_min, self.vel_x_max = -0.28, 0.28
         
@@ -89,7 +89,7 @@ class CustomSetPointPublisher(Node):
         # self.ori_z_range = 0.5
         # self.vel_x_range = 0.1
         
-        self.pos_z_range = 2.0
+        self.pos_z_range = 0.0
         self.ori_z_range = 2 * np.pi
         self.vel_x_range = 0.6
 
@@ -131,7 +131,7 @@ class CustomSetPointPublisher(Node):
                 reset_position = Vector3(
                     x=random.uniform(-1.0, 1.0),
                     y=random.uniform(-1.0, 1.0), 
-                    z=random.uniform(self.pos_z_min, self.pos_z_max)
+                    z= 2.0# random.uniform(self.pos_z_min, self.pos_z_max)
                 )
                 
                 reset_orientation = Vector3(
@@ -182,6 +182,7 @@ class CustomSetPointPublisher(Node):
             msg.child_frame_id = self.child_frame_id
             msg.control_mode = self.control_mode_value
             msg.position = position
+            msg.position.z = 2.0
             msg.orientation = orientation
             msg.velocity = velocity
             msg.angular_rate = angular_rate
@@ -285,7 +286,7 @@ class CustomSetPointPublisher(Node):
                 # Apply noise
                 current_position.x += pos_noise[0]
                 current_position.y += pos_noise[1]
-                current_position.z += pos_noise[2]
+                current_position.z  =  2 #current_position.z # += pos_noise[2]
                 
                 # current_orientation.x += ori_noise[0]
                 # current_orientation.y += ori_noise[1]

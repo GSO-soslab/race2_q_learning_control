@@ -51,7 +51,7 @@ noise_sigma = config['agent']['epsilon_initial']
 action_noise = OrnsteinUhlenbeckActionNoise(
     mean=np.zeros(n_actions),
     sigma=noise_sigma * np.ones(n_actions),
-    theta=0.05  # Default OU process parameter
+    theta=0.15  # Default OU process parameter
 )
 
 

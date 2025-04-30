@@ -292,7 +292,7 @@ class AUVEnv(gym.Env):
             np.random.seed(seed)
         
         self.episode_step = 0
-        self.episode_reward = 0.0
+        self.episode_reward = 0
         
         # Get current state from the node
         depth = self.node.position_state[2:3]
@@ -344,12 +344,12 @@ class AUVEnv(gym.Env):
         self.last_action = action.copy()
         
         # Wait for callbacks to be processed
-        timeout_sec = 0.1
+        timeout_sec = 1.0
         start_time = time.time()
-        
+        time.sleep(1.0)
         # Process ROS events to handle callbacks
         while not (self.node.new_state_available and self.node.new_error_available):
-            self._spin_node(timeout_sec=0.01)
+            self._spin_node(timeout_sec=0.1)
             
             if time.time() - start_time > timeout_sec:
                 print("Warning: Timeout waiting for state/error updates")
@@ -404,13 +404,20 @@ class AUVEnv(gym.Env):
             print("Warning: No new state/error available, returning dummy observation")
             observation = np.zeros(14)  # Dummy observation
             terminated = True 
-        
+        print(state_error_array)
         # Calculate reward
         reward = self.calculate_reward(state_error_array)
         if isinstance(reward, np.ndarray):
             reward = float(reward.item())
         self.episode_reward += reward
         
+        # self.episode_reward.append
+
+        # rewards = np.array(self.episode_reward)
+        # mean = rewards.mean()
+        # std = rewards.std() if rewards.std() > 1e-8 else 1.0
+        # self.normalized_rewards = (rewards - mean) / std
+
         # Check if episode should end
         truncated = False
         if self.episode_step >= self.node.max_steps:
@@ -457,7 +464,7 @@ class AUVEnv(gym.Env):
         # print(weights_diag.shape)
         
         performance_error = error_row @ weights_diag @ error_column
-        performance_error = np.exp(-performance_error)
+        performance_error = -performance_error
         # print(performance_error)
 
         # Servo smoothness penalty using sine and cosine components
@@ -527,6 +534,128 @@ class AUVEnv(gym.Env):
         )
         
         return reward
+
+
+    # def calculate_reward(self, state_error_array):
+    #     """
+    #     Improved reward function that encourages exploration and provides
+    #     better learning signals for deep reinforcement learning
+    #     """
+    #     w = self.config['reward_function']
+    #     w1, w2, w3, w4, w5, w6, w7, w8 = w['w1'], w['w2'], w['w3'], w['w4'], w['w5'], w['w6'], w['w7'], w['w8']
+    #     state_error_weights = np.array(w['state_error_weights'])
+        
+    #     # Extract errors
+    #     error = state_error_array
+        
+    #     # Base performance reward - using a more gradual error to reward mapping
+    #     # The key is to make smaller errors give distinctive reward signals
+    #     # rather than having reward go to near-zero for large errors
+    #     performance_reward = 0
+    #     for i, err in enumerate(error):
+    #         if state_error_weights[i] > 0:  # Only process weighted errors
+    #             # Quadratic error term, but scaled to avoid very small values
+    #             error_contribution = -state_error_weights[i] * (err ** 2)
+                
+    #             # Using a softer scaling function that maps -inf to 0 and 0 to 1
+    #             # This ensures better reward signal even when far from target
+    #             scaled_contribution = 2.0 / (1.0 + np.exp(error_contribution * 0.5)) - 1.0
+                
+    #             performance_reward += scaled_contribution
+        
+    #     # Normalize by number of active weights to keep reward in reasonable range
+    #     active_weights = np.sum(state_error_weights > 0)
+    #     if active_weights > 0:
+    #         performance_reward /= active_weights
+        
+    #     # Calculate penalties (if enabled in config)
+    #     penalties = 0.0
+        
+    #     # Servo smoothness penalty
+    #     if w2 > 0:
+    #         servo_smoothness_penalty = 0
+    #         delta_theta = np.zeros(self.num_servos)
+            
+    #         for i in range(self.num_servos):
+    #             if len(self.joint_positions_history) > 0:
+    #                 avg_sin = np.average(np.sin(self.joint_positions_history[:, i]))
+    #                 avg_cos = np.average(np.cos(self.joint_positions_history[:, i]))
+    #                 historical_avg_angle = np.arctan2(avg_sin, avg_cos)
+    #                 current_angle = self.joint_angles[i] if i < len(self.joint_angles) else 0
+    #                 delta_theta[i] = np.abs(current_angle - historical_avg_angle)
+                    
+    #         servo_smoothness_penalty = np.linalg.norm(delta_theta)
+    #         penalties += w2 * servo_smoothness_penalty
+        
+    #     # Thruster usage penalty - be careful with this! Can discourage learning
+    #     if w3 > 0:
+    #         u_t = np.array([
+    #             self.node.thrust_heave_bow,
+    #             self.node.thrust_heave_stern
+    #         ])
+    #         thruster_usage_penalty = np.sum(np.abs(u_t))
+    #         penalties += w3 * thruster_usage_penalty * 0.1  # Scale down to avoid dominating reward
+        
+    #     # Other penalties - similarly scaled down to avoid dominating
+    #     if w4 > 0:
+    #         u_t = np.array([
+    #             self.node.thrust_heave_bow,
+    #             self.node.thrust_heave_stern
+    #         ])
+    #         thruster_smoothness_penalty = np.linalg.norm(u_t - np.average(self.u_prev, axis=0))
+    #         penalties += w4 * thruster_smoothness_penalty * 0.1
+        
+    #     if w5 > 0:
+    #         servo_angle_penalty = np.linalg.norm(self.joint_angles)
+    #         penalties += w5 * servo_angle_penalty * 0.1
+        
+    #     if w6 > 0:
+    #         u_t = np.array([
+    #             self.node.thrust_heave_bow,
+    #             self.node.thrust_heave_stern
+    #         ])
+    #         thruster_delta_reward = np.linalg.norm(u_t - self.u_prev[-2]) if len(self.u_prev) >= 2 else 0
+    #         penalties += w6 * thruster_delta_reward * 0.1
+        
+    #     if w7 > 0:
+    #         thruster_action_penalty = np.sum(np.abs(self.thruster_action - np.average(self.thruster_command_action_prev, axis=0)))
+    #         penalties += w7 * thruster_action_penalty * 0.1
+        
+    #     if w8 > 0:
+    #         thruster_action_penalty = np.sum(np.abs(self.thruster_action - np.average(self.thruster_command_action_prev, axis=0)))
+    #         direction_change_penalty = thruster_action_penalty ** 2  
+    #         penalties += w8 * direction_change_penalty * 0.1
+        
+    #     # Update history for next iteration
+    #     self.joint_positions_history = np.vstack((self.joint_positions_history[1:], self.joint_angles))
+        
+    #     u_t = np.array([
+    #         self.node.thrust_heave_bow,
+    #         self.node.thrust_heave_stern
+    #     ])
+    #     self.u_prev = np.vstack((self.u_prev[1:], u_t))
+        
+    #     self.thruster_command_action_prev = np.vstack((
+    #         self.thruster_command_action_prev[1:],
+    #         self.thruster_action
+    #     ))
+        
+    #     # Exploration bonus (decreases over time)
+    #     episode_fraction = min(1.0, self.episode_step / 500)
+    #     exploration_bonus = 0.2 * (1.0 - episode_fraction)
+        
+    #     # Calculate final reward - performance reward is positive, penalties are negative
+    #     reward = w1 * performance_reward - penalties + exploration_bonus
+        
+    #     # Add logging every N steps
+    #     if self.episode_step % 50 == 0:
+    #         self.node.get_logger().info(
+    #             f"Step {self.episode_step}: performance={performance_reward:.3f}, "
+    #             f"penalties={penalties:.3f}, exploration={exploration_bonus:.3f}, "
+    #             f"reward={reward:.3f}, depth_err={error[0]:.3f}, pitch_err={error[4]:.3f}"
+    #         )
+        
+    #     return reward
     
     def close(self):
         """Clean up resources"""
