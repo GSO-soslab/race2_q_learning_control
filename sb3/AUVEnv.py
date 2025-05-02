@@ -184,8 +184,8 @@ class AUVEnvNode(Node):
         # Map to appropriate publishers
         # All DOFs - modify as needed for your specific configuration
         thruster_mapping = [
-            ('heave_bow', 0.8 * thruster_cmds[0]),
-            ('heave_stern', 0.8 * thruster_cmds[1])
+            ('heave_bow', thruster_cmds[0]),
+            ('heave_stern', thruster_cmds[1])
             # ('surge_port',  0.0 * thruster_cmds[0]),
             # ('surge_starboard', 0.0 * thruster_cmds[1]),
             # ('port_servo', 0.0 *servo_angles_rad[0]),
@@ -285,7 +285,7 @@ class AUVEnv(gym.Env):
     
     def reset(self, seed=None):
         """Reset the environment to initial state and return the initial observation"""
-        # Process ROS events to ensure we have the latest state
+        #so the states come in
         self._spin_node(timeout_sec=0.1)
 
         if seed is not None:
@@ -294,7 +294,10 @@ class AUVEnv(gym.Env):
         self.episode_step = 0
         self.episode_reward = 0
         
-        # Get current state from the node
+        zero_thruster_cmds = np.zeros(self.num_thrusters)  
+        zero_servo_angles_rad = np.zeros(self.num_servos)  
+        zero_action = np.zeros(self.num_thrusters + self.num_servos)  
+        self.node.publish_action(zero_action, self.num_thrusters, self.num_servos)    
         depth = self.node.position_state[2:3]
         surge = self.node.v_state[0:1]     
         sway = self.node.v_state[1:2]      
@@ -337,96 +340,100 @@ class AUVEnv(gym.Env):
         """Execute action in the environment and return next state, reward, termination flag, etc."""
         # Publish action to ROS
         thruster_cmds, servo_angles_rad = self.node.publish_action(action, self.num_thrusters, self.num_servos)
-        
         # Store for reward calculation
         self.thruster_action = thruster_cmds
         self.joint_angles = servo_angles_rad
         self.last_action = action.copy()
-        
         # Wait for callbacks to be processed
-        timeout_sec = 1.0
+        timeout_sec = 1
         start_time = time.time()
-        time.sleep(1.0)
+        # time.sleep(1.0)
         # Process ROS events to handle callbacks
         while not (self.node.new_state_available and self.node.new_error_available):
-            self._spin_node(timeout_sec=0.1)
-            
+            self._spin_node(timeout_sec=0.998)
             if time.time() - start_time > timeout_sec:
                 print("Warning: Timeout waiting for state/error updates")
                 break
-        
         # Get updated state from the node
         if self.node.new_state_available and self.node.new_error_available:
             updated_depth = self.node.position_state[2:3]
-            updated_surge = self.node.v_state[0:1]     
-            updated_sway = self.node.v_state[1:2]      
-            updated_heave = self.node.v_state[2:3]        
-            updated_roll = self.node.orientation_state[0:1]         
-            updated_pitch = self.node.orientation_state[1:2]         
-            updated_yaw = self.node.orientation_state[2:3]           
-
-            updated_depth_error = self.node.position_err[2:3]        
-            updated_surge_error = self.node.v_err[0:1]   
-            updated_sway_error = self.node.v_err[1:2]       
-            updated_heave_error = self.node.v_err[2:3]      
-            updated_roll_error = self.node.orientation_err[0:1]     
-            updated_pitch_error = self.node.orientation_err[1:2]     
-            updated_yaw_error = self.node.orientation_err[2:3] 
-
+            updated_surge = self.node.v_state[0:1]
+            updated_sway = self.node.v_state[1:2]
+            updated_heave = self.node.v_state[2:3]
+            updated_roll = self.node.orientation_state[0:1]
+            updated_pitch = self.node.orientation_state[1:2]
+            updated_yaw = self.node.orientation_state[2:3]
+            updated_depth_error = self.node.position_err[2:3]
+            updated_surge_error = self.node.v_err[0:1]
+            updated_sway_error = self.node.v_err[1:2]
+            updated_heave_error = self.node.v_err[2:3]
+            updated_roll_error = self.node.orientation_err[0:1]
+            updated_pitch_error = self.node.orientation_err[1:2]
+            updated_yaw_error = self.node.orientation_err[2:3]
             observation = np.concatenate([
-                updated_depth_error, 
-                updated_surge_error, 
+                updated_depth_error,
+                updated_surge_error,
                 updated_sway_error,
                 updated_heave_error,
-                updated_roll_error, 
-                updated_pitch_error, 
+                updated_roll_error,
+                updated_pitch_error,
                 updated_yaw_error,
-                updated_depth, 
-                updated_surge, 
+                updated_depth,
+                updated_surge,
                 updated_sway,
                 updated_heave,
-                updated_roll, 
-                updated_pitch, 
+                updated_roll,
+                updated_pitch,
                 updated_yaw
             ])
             state_error_array = np.concatenate([
-                updated_depth_error, 
-                updated_surge_error, 
+                updated_depth_error,
+                updated_surge_error,
                 updated_sway_error,
                 updated_heave_error,
-                updated_roll_error, 
-                updated_pitch_error, 
+                updated_roll_error,
+                updated_pitch_error,
                 updated_yaw_error
-            ]
-            )
+            ])
             terminated = False
-        else: 
+        else:
             print("Warning: No new state/error available, returning dummy observation")
             observation = np.zeros(14)  # Dummy observation
-            terminated = True 
-        print(state_error_array)
+            terminated = True
+        
+        # print(state_error_array)
         # Calculate reward
         reward = self.calculate_reward(state_error_array)
         if isinstance(reward, np.ndarray):
             reward = float(reward.item())
+        
+        # Store raw reward in episode rewards list
+        if not hasattr(self, 'episode_rewards'):
+            self.episode_rewards = []
+        self.episode_rewards.append(reward)
+        
+        # # Normalize reward using the history of rewards
+        # if len(self.episode_rewards) > 1:
+        #     rewards = np.array(self.episode_rewards)
+        #     mean = rewards.mean()
+        #     std = rewards.std() if rewards.std() > 1e-8 else 1.0
+        #     normalized_reward = 10 * (reward - mean) / std
+        # else:
+        #     normalized_reward = 10 * reward
+        
+        # print(normalized_reward)
+        # Track cumulative episode reward (using raw reward)
         self.episode_reward += reward
         
-        # self.episode_reward.append
-
-        # rewards = np.array(self.episode_reward)
-        # mean = rewards.mean()
-        # std = rewards.std() if rewards.std() > 1e-8 else 1.0
-        # self.normalized_rewards = (rewards - mean) / std
-
         # Check if episode should end
         truncated = False
         if self.episode_step >= self.node.max_steps:
             truncated = True
-        
+        print ("Immediate reward: ",reward)
         # Increment step counter
         self.episode_step += 1
         
-        return observation, reward, terminated, truncated, {}
+        return observation, 100 * reward, terminated, truncated, {}
     
     def _spin_node(self, timeout_sec=0.1):
         """Process ROS callbacks for a limited time"""

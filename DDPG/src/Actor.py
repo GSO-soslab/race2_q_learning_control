@@ -44,10 +44,8 @@ class Actor(nn.Module):
                 if module.bias is not None:
                     nn.init.constant_(module.bias, 0.01)
         
-        # Special initialization for the final output layer
-        # Using smaller values for the final layer can help with initial exploration
-        nn.init.uniform_(self.output_layer.weight, -3e-3, 3e-3)
-        nn.init.uniform_(self.output_layer.bias, -3e-3, 3e-3)
+        nn.init.uniform_(self.output_layer.weight, -3e-4, 3e-4)
+        nn.init.uniform_(self.output_layer.bias, -3e-4, 3e-4)
     
     def forward(self, state):
         x = self.layers(state)

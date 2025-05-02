@@ -8,6 +8,7 @@ from datetime import datetime
 from stable_baselines3.ddpg.policies import MlpPolicy
 from stable_baselines3.common.noise import NormalActionNoise, OrnsteinUhlenbeckActionNoise
 from stable_baselines3 import DDPG
+from stable_baselines3.common.callbacks import BaseCallback
 import torch as th
 from AUVEnv import AUVEnv
 
@@ -87,7 +88,12 @@ model = DDPG(
     tensorboard_log=log_dir
 )
 
-model.learn(total_timesteps=4000)
+print(model.policy) 
+
+# Training the model with the callback
+model.learn(total_timesteps=50000)
+
+# model.learn(total_timesteps=4000)
 model.save("ddpg_race2_auv")
 
 del model # remove to demonstrate saving and loading

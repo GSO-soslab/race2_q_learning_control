@@ -4,7 +4,7 @@ import numpy as np
 import torch
 class ReplayBuffer:
     """Experience replay buffer with separate states for actor and critic"""
-    def __init__(self, actor_state_dim, critic_state_dim,n_actions, buffer_capacity=100000, batch_size=128):
+    def __init__(self, actor_state_dim, critic_state_dim,n_actions, buffer_capacity=100000, batch_size=64):
         self.buffer_capacity = buffer_capacity
         self.batch_size = batch_size
         self.mem_cntr = 0

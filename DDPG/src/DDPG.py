@@ -43,8 +43,8 @@ class DDPG:
         print(f"Critic weight change: {critic_change:.8f}")
 
         # Initialize optimizers
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=2e-4)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=2e-3)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=1e-5)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=1e-5)
         
         # Initialize replay buffer (modified to store both actor and critic states)
         self.buffer = ReplayBuffer(actor_state_dim, critic_state_dim, action_dim)
@@ -56,7 +56,7 @@ class DDPG:
         )
         
         # Hyperparameters
-        self.gamma = 0.99  # Discount factor
+        self.gamma = 0.9  # Discount factor
         self.tau = 0.001 # Target network update rate (0.01 for depth only)
 
 
@@ -161,17 +161,18 @@ class DDPG:
         
         # Update actor using deterministic policy gradient
         self.critic.eval()
-        self.actor.train()
         self.actor_optimizer.zero_grad()
         actions_pred = self.actor.forward(actor_states)
-        actor_loss = -self.critic.forward(critic_states, actions_pred).mean()
+        self.actor.train()
+        actor_loss = -self.critic.forward(critic_states, actions_pred)
+        actor_loss = actor_loss.mean()
         actor_loss.backward()
         self.actor_optimizer.step()
         
         # Update target networks
         self.update_targets()
         
-        return critic_loss.item(), actor_loss.item(), rewards.mean().item(), current_q.mean().item()
+        return critic_loss.item(), actor_loss.item(), rewards.mean().item(), current_q.mean().item() , target_q.mean().item()
     
     def update_targets(self):
         """Soft update target networks"""

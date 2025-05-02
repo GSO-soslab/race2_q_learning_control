@@ -5,8 +5,8 @@ max_servo_angle_rad: 0.785
 qnetwork:
   # actor_hidden_layers: [256,256 ,256] 
   # critic_hidden_layers: [256, 256, 256] 
-  actor_hidden_layers: [500,500 ,500] 
-  critic_hidden_layers: [500, 500, 500] 
+  actor_hidden_layers: [128,128 ,128] 
+  critic_hidden_layers: [128, 128, 128] 
   use_batch_norm: true
 
 agent:
@@ -41,7 +41,7 @@ reward_function:
   w1: 1.0             # Weight for performance error
   w2: 0.0             # Weight for servo smoothness penalty
   w3: 0.0              # Weight for thruster usage penalty (keep zero)
-  w4: 1.0              # Weight for thruster smoothness penalty
+  w4: 0.0              # Weight for thruster smoothness penalty
   w5: 0.0              # Weight for servo angle penalty (keep zero)
   w6: 0.0              # Weight for thruster delta reward
   w7: 0.0              # Weight for action delta reward
