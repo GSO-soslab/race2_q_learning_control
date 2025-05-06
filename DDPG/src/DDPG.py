@@ -52,7 +52,12 @@ class DDPG:
         # Initialize noise process
         self.noise = OUActionNoise(
             mean=np.zeros(action_dim),
-            std_deviation=0.15 * np.ones(action_dim)
+            std_deviation=np.array([0.2, 0.2]),
+            theta=0.15,
+            dt=0.01,
+            decay_period=500000, 
+            min_std_ratio=0.1,   
+            decay_type="exponential" 
         )
         
         # Hyperparameters
@@ -60,7 +65,7 @@ class DDPG:
         self.tau = 0.001 # Target network update rate (0.01 for depth only)
 
 
-    def update_learning_rates(self, episode, avg_recent_rewards, decay_factor=0.5, patience=100000):
+    def update_learning_rates(self, episode, avg_recent_rewards, decay_factor=0.9, patience=50):
         """
         Reduce learning rate when performance plateaus
         """

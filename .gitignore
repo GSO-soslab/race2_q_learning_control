@@ -9,6 +9,7 @@
 # User-specific stuff
 .idea
 DDPG/src/checkpoints/*
+DDPG/checkpoints/*
 sb3/auv_venv
 sb3/results 
 # Gradle

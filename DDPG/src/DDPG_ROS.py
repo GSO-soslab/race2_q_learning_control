@@ -1,7 +1,7 @@
 import os,time, datetime
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float64, Float32
+from std_msgs.msg import Float64, Float32, String
 from geometry_msgs.msg import TwistStamped
 from mvp_msgs.msg import ControlProcess
 from sensor_msgs.msg import Imu
@@ -9,6 +9,7 @@ from DDPG import DDPG
 import torch
 import numpy as np
 from config_utils import load_config 
+import json
 
 
 class DDPG_ROS(Node):
@@ -19,8 +20,8 @@ class DDPG_ROS(Node):
         self.config = config
 
         # Define separate dimensions for actor and critic
-        self.actor_state_dim = 13   # Example: position_err, v_err, orientation_err
-        self.critic_state_dim = 13  # error states + commands
+        self.actor_state_dim = 12   # Example: position_err, v_err, orientation_err
+        self.critic_state_dim = 12  # error states + commands
         self.action_dim = 2  # 4 thrusters + 2 servo angles
         self.action_bound = 1.0  # All commands between -1 and 1
         
@@ -28,6 +29,29 @@ class DDPG_ROS(Node):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.get_logger().info(f"Using device: {self.device}")
         self.agent = DDPG(self.actor_state_dim, self.critic_state_dim, self.action_dim, self.action_bound, config, device=self.device)
+
+        self.use_adaptive_scaling = True
+        self.scale_parameters = {
+            'depth_error': {'scale': 0.2},    # Typical depth errors might be in 0.2m range
+            'surge_error': {'scale': 2.0},    # Velocity errors might be in 0.5m/s range
+            'sway_error': {'scale': 2.0},     # Velocity errors might be in 0.5m/s range
+            'roll_error': {'scale': 0.2},     # Assume errors in radians (5 degrees ≈ 0.09 rad)
+            'pitch_error': {'scale': 0.2},    # Assume errors in radians (5 degrees ≈ 0.09 rad)
+            'yaw_error': {'scale': 0.2},      # Assume errors in radians (5 degrees ≈ 0.09 rad)
+            'depth': {'scale': 0.2},          # Depth could be several meters
+            'surge': {'scale': 2.0},          # Velocities typically < 0.5m/s
+            'sway': {'scale': 2.0},           # Velocities typically < 0.5m/s
+            'heave': {'scale': 2.0},          # Velocities typically < 0.5m/s
+            'roll': {'scale': 0.2},           # Angles in radians
+            'pitch': {'scale': 0.2},          # Angles in radians
+            'yaw': {'scale': 0.2}             # Angles in radians
+        }
+
+        # Parameters for adaptive scaling
+        self.scale_update_rate = 0.01  # How quickly to adapt scales
+        self.scale_target_range = 0.8  # Target range for scaled values (-0.8 to 0.8)
+        self.min_scale_factor = 0.1   # Minimum scaling factor
+        self.scaling_warmup_steps = 100  # Number of steps before scaling starts
 
         # Rest of the initialization code remains the same
         # ROS2 publishers for each actuator
@@ -48,7 +72,8 @@ class DDPG_ROS(Node):
         self.critic_loss_pub = self.create_publisher(Float32, 'ddpg/critic_loss', 10)
         self.episode_pub = self.create_publisher(Float32, 'ddpg/episode', 10)
 
-        
+        self.scale_factors_pub = self.create_publisher(String, 'ddpg/scale_factors', 10)
+
         self.create_subscription(ControlProcess,  
                                 '/race2_auv/controller/process/value',
                                 self.state_callback,
@@ -95,7 +120,7 @@ class DDPG_ROS(Node):
                                 1)
         
         # Training parameters
-        self.declare_parameter('checkpoints_save_period', 100)
+        self.declare_parameter('checkpoints_save_period', 2)
         self.checkpoints_save_period = self.get_parameter('checkpoints_save_period').value
         
         self.declare_parameter('training_mode', True)
@@ -106,7 +131,8 @@ class DDPG_ROS(Node):
         self.reward_history_window_size = self.get_parameter('reward_history_window_size').value
         # self.declare_parameter('model_path', '/home/soslab/race2_ws/src/race2_q_learning_control/DDPG/src/checkpoints/session_20250421_130624/ddpg_auv_model_ep770.pt')
         # self.declare_parameter('model_path', '/home/farhang/race2_ws/src/race2_q_learning_control/DDPG/src/checkpoints/session_20250422_191702/ddpg_auv_model_ep1300.pt')
-        # self.declare_parameter('model_path', '/home/farhang/race2_ws/src/race2_q_learning_control/DDPG/src/checkpoints/session_20250424_172104/ddpg_auv_model_ep20.pt')
+        # self.declare_parameter('model_path', '/home/farhang/race2_ws/src/race2_q_learning_control/DDPG/src/checkpoints/session_20250505_214041/ddpg_auv_model_ep10.pt')
+        # self.declare_parameter('model_path', '/home/farhang/race2_ws/src/race2_q_learning_control/DDPG/src/ddpg_auv_model_final.pt')
 
         self.declare_parameter('model_path', '')
         self.declare_parameter('max_episodes', 700)  # Default 1000 episodes
@@ -192,8 +218,29 @@ class DDPG_ROS(Node):
         self.episode_reward = 0
         
         # Create timer for control loop
-        self.timer = self.create_timer(0.1, self.control_loop)  # 100 Hz control loop
+        self.timer = self.create_timer(0.2, self.control_loop)  # 100 Hz control loop
         
+    def apply_adaptive_scaling(self, state_dict):
+        """Apply fixed scaling to state variables based on hardcoded values"""
+        scaled_dict = {}
+        
+        # Apply fixed scaling factors
+        for key, value in state_dict.items():
+            if key in self.scale_parameters:
+                scaled_dict[key] = value * self.scale_parameters[key]['scale']
+            else:
+                scaled_dict[key] = value
+                
+        return scaled_dict
+
+    def publish_scale_factors(self):
+        """Publish current scale factors for monitoring"""
+        if self.step_counter % 20 == 0:  # Only publish occasionally
+            msg = String()
+            scale_info = {k: {'scale': float(v['scale'])} for k, v in self.scale_parameters.items()}
+            msg.data = json.dumps(scale_info)
+            self.scale_factors_pub.publish(msg)
+
     def state_callback(self, data):
         """Process state updates from sensors"""
         # Add timestamp to the state observation
@@ -492,7 +539,6 @@ class DDPG_ROS(Node):
             os.makedirs(self.checkpoint_dir, exist_ok=True)
             self.get_logger().info(f"Created checkpoint directory: {self.checkpoint_dir}")
 
-        # done = False
         # Extract state variables
         depth = self.position_state[2:3]
         surge = self.v_state[0:1]     
@@ -519,21 +565,47 @@ class DDPG_ROS(Node):
         pitch_rate_error = self.omega_ref_err[1:2] 
         yaw_rate_error = self.omega_ref_err[2:3]
 
-        # Create actor state
+        # Create state dictionary for scaling
+        state_dict = {
+            'depth_error': depth_error, 
+            'surge_error': surge_error, 
+            'sway_error': sway_error, 
+            'roll_error': roll_error, 
+            'pitch_error': pitch_error, 
+            'yaw_error': yaw_error,
+            # 'depth': depth, 
+            'surge': surge, 
+            'sway': sway,
+            'heave': heave, 
+            'roll': roll, 
+            'pitch': pitch, 
+            'yaw': yaw
+        }
+        
+        # Apply adaptive scaling if enabled
+        if self.use_adaptive_scaling:
+            scaled_dict = self.apply_adaptive_scaling(state_dict)
+            
+            # Publish scale factors occasionally
+            self.publish_scale_factors()
+        else:
+            scaled_dict = state_dict
+        
+        # Create actor state with scaled values
         self.actor_state = np.concatenate([
-            depth_error, 
-            surge_error, 
-            sway_error, 
-            roll_error, 
-            pitch_error, 
-            yaw_error,  
-            depth, 
-            surge, 
-            sway, 
-            heave,
-            roll, 
-            pitch, 
-            yaw           
+            scaled_dict['depth_error'], 
+            scaled_dict['surge_error'], 
+            scaled_dict['sway_error'], 
+            scaled_dict['roll_error'], 
+            scaled_dict['pitch_error'], 
+            scaled_dict['yaw_error'],  
+            # scaled_dict['depth'], 
+            scaled_dict['surge'], 
+            scaled_dict['sway'], 
+            scaled_dict['heave'],
+            scaled_dict['roll'], 
+            scaled_dict['pitch'], 
+            scaled_dict['yaw']           
         ])
 
         # Use same state for critic
@@ -541,136 +613,173 @@ class DDPG_ROS(Node):
         
         # Get action from agent
         action = self.agent.get_action(self.actor_state, add_noise=self.training_mode)
-        action = np.reshape(action, -1) 
-        # print(action)
-        # action = [self.thrust_heave_bow, self.thrust_heave_stern]
+        action = np.reshape(action, -1)
+        
+        # Store current state and action for delayed next state calculation
+        self.prev_actor_state = self.actor_state.copy()
+        self.prev_critic_state = self.critic_state.copy()
+        self.prev_action = action.copy()
+        self.prev_state_dict = state_dict.copy()  # Store unscaled state for reward calculation
+        
         # Publish action
         self.publish_action(action)
-        self.publish_time = time.time()
+        self.action_publish_time = time.time()
         
         # Check if episode is done
         done = self.is_done(self.critic_state)
 
-        # Training mode logic
-        time.sleep(0.5)
+        # Wait for state change - this is important!
+        if hasattr(self, 'prev_action') and self.prev_action is not None:
+            # We need to use the previous action and get the next state
+            # The time.sleep was preventing proper state updates
+            time.sleep(0.2)  # Small sleep to allow state to update
+            
+            # Now get updated state values after action
+            updated_depth = self.position_state[2:3]
+            updated_surge = self.v_state[0:1]     
+            updated_sway = self.v_state[1:2]      
+            updated_heave = self.v_state[2:3]        
+            updated_roll = self.orientation_state[0:1]         
+            updated_pitch = self.orientation_state[1:2]         
+            updated_yaw = self.orientation_state[2:3]           
 
-        # Get updated state after action
-        updated_depth = self.position_state[2:3]
-        updated_surge = self.v_state[0:1]     
-        updated_sway = self.v_state[1:2]      
-        updated_heave = self.v_state[2:3]        
-        updated_roll = self.orientation_state[0:1]         
-        updated_pitch = self.orientation_state[1:2]         
-        updated_yaw = self.orientation_state[2:3]           
+            updated_depth_error = self.position_err[2:3]        
+            updated_surge_error = self.v_err[0:1]   
+            updated_sway_error = self.v_err[1:2]       
+            updated_heave_error = self.v_err[2:3]      
+            updated_roll_error = self.orientation_err[0:1]     
+            updated_pitch_error = self.orientation_err[1:2]     
+            updated_yaw_error = self.orientation_err[2:3] 
 
-        updated_depth_error = self.position_err[2:3]        
-        updated_surge_error = self.v_err[0:1]   
-        updated_sway_error = self.v_err[1:2]       
-        updated_heave_error = self.v_err[2:3]      
-        updated_roll_error = self.orientation_err[0:1]     
-        updated_pitch_error = self.orientation_err[1:2]     
-        updated_yaw_error = self.orientation_err[2:3] 
-
-        # Create next state
-        next_actor_state = np.concatenate([
-            updated_depth_error, 
-            updated_surge_error, 
-            updated_sway_error,
-            updated_roll_error, 
-            updated_pitch_error, 
-            updated_yaw_error,
-            updated_depth, 
-            updated_surge, 
-            updated_sway,
-            updated_heave,
-            updated_roll, 
-            updated_pitch, 
-            updated_yaw
-        ])
-        next_critic_state = next_actor_state
-        state_error_array = np.concatenate(
-            [
-            updated_depth_error, 
-            updated_surge_error, 
-            updated_sway_error,
-            updated_roll_error, 
-            updated_pitch_error, 
-            updated_yaw_error,
+            # Create updated state dictionary for scaling
+            next_state_dict = {
+                'depth_error': updated_depth_error, 
+                'surge_error': updated_surge_error, 
+                'sway_error': updated_sway_error, 
+                'roll_error': updated_roll_error, 
+                'pitch_error': updated_pitch_error, 
+                'yaw_error': updated_yaw_error,
+                # 'depth': updated_depth, 
+                'surge': updated_surge, 
+                'sway': updated_sway,
+                'heave': updated_heave, 
+                'roll': updated_roll, 
+                'pitch': updated_pitch, 
+                'yaw': updated_yaw
+            }
+            
+            # Apply same scaling to next state
+            if self.use_adaptive_scaling:
+                next_scaled_dict = self.apply_adaptive_scaling(next_state_dict)
+            else:
+                next_scaled_dict = next_state_dict
+            
+            # Create next state with scaled values
+            next_actor_state = np.concatenate([
+                next_scaled_dict['depth_error'], 
+                next_scaled_dict['surge_error'], 
+                next_scaled_dict['sway_error'],
+                next_scaled_dict['roll_error'], 
+                next_scaled_dict['pitch_error'], 
+                next_scaled_dict['yaw_error'],
+                # next_scaled_dict['depth'], 
+                next_scaled_dict['surge'], 
+                next_scaled_dict['sway'],
+                next_scaled_dict['heave'],
+                next_scaled_dict['roll'], 
+                next_scaled_dict['pitch'], 
+                next_scaled_dict['yaw']
             ])
-        # Calculate reward
-        reward = self.calculate_reward(state_error_array)
-        if isinstance(reward, np.ndarray):
-            reward = float(reward.item())
-        
-        # Add to episode reward
-        self.episode_reward += reward
+            next_critic_state = next_actor_state
+            
+            # Use unscaled errors for reward calculation - keep original scale for rewards
+            state_error_array = np.concatenate([
+                updated_depth_error, 
+                updated_surge_error, 
+                updated_sway_error,
+                updated_roll_error, 
+                updated_pitch_error, 
+                updated_yaw_error
+            ])
+            
+            reward = self.calculate_reward(state_error_array)
+            if isinstance(reward, np.ndarray):
+                reward = float(reward.item())
+            
+            self.episode_reward += reward
 
-        # Store experience in replay buffer
-        self.agent.remember(
-            self.actor_state, 
-            self.critic_state, 
-            action, 
-            100 * reward, 
-            next_actor_state, 
-            next_critic_state, 
-            done
-        )
-        
-        # Train agent
-        result = self.agent.learn()
-        if all(v is not None for v in result):
-            critic_loss, actor_loss, reward_value, current_q_value , target_q_value = result
-            self.publish_metrics(reward_value, current_q_value, actor_loss, critic_loss)
-            self.step_counter += 1        
-            self.get_logger().info(f"Critic Loss: {critic_loss:.4f}, Actor Loss: {actor_loss:.4f}, Reward: {reward_value:.4f}  ,Current Q_value: {current_q_value:.4f} , Target Q_value: {target_q_value:.4f}")
-        else:
-            self.get_logger().debug("Learn returned None — skipping training this step.")
-        
-        # Update episode step counter
-        self.episode_step += 1
+            self.agent.remember(
+                self.prev_actor_state, 
+                self.prev_critic_state, 
+                self.prev_action, 
+                100 * reward,  
+                next_actor_state, 
+                next_critic_state, 
+                done
+            )
+            
+            # Train agent
+            result = self.agent.learn()
+            if all(v is not None for v in result):
+                critic_loss, actor_loss, reward_value, current_q_value, target_q_value = result
+                self.publish_metrics(reward_value, current_q_value, actor_loss, critic_loss)
+                self.step_counter += 1        
+                # self.get_logger().info(f"Critic Loss: {critic_loss:.4f}, Actor Loss: {actor_loss:.4f}, " +
+                #                      f"Reward: {reward_value:.4f}, Current Q: {current_q_value:.4f}, " +
+                #                      f"Target Q: {target_q_value:.4f}")
+            else:
+                self.get_logger().debug("Learn returned None — skipping training this step.")
+            
+            # Update episode step counter
+            self.episode_step += 1
 
-        # Check for episode end
-        if done or self.episode_step >= self.max_steps:
-            self.get_logger().info(f"Episode {self.episode_count} completed: Steps={self.episode_step}, Reward={self.episode_reward:.2f}")
-            self.episode_step = 0
-            self.episode_count += 1
-            
-            # Learning rate update feature
-            self.recent_rewards.append(self.episode_reward)
-            
-            #keep rewards for moving average
-            if len(self.recent_rewards) > self.reward_history_window_size:
-                self.recent_rewards.pop(0)
-            
-            # Calculate average reward
-            avg_reward = sum(self.recent_rewards) / len(self.recent_rewards)
-            
-            # Update learning rates based on performance
-            if self.training_mode:
-                lr_updated = self.agent.update_learning_rates(self.episode_count, avg_reward)
-                if lr_updated:
-                    self.get_logger().info(f"Episode {self.episode_count}: Learning rate decreased due to performance plateau")
-            
-                # Save model periodically (only in training mode)
-                if self.episode_count % self.checkpoints_save_period == 0:
-                    model_path = os.path.join(self.checkpoint_dir, f"ddpg_auv_model_ep{self.episode_count}.pt")
-                    self.agent.save_weights(model_path)
-                    self.get_logger().info(f"Model saved to {model_path}")
+            # Check for episode end
+            if done or self.episode_step >= self.max_steps:
+                self.get_logger().info(f"Episode {self.episode_count} completed: " +
+                                     f"Steps={self.episode_step}, Reward={self.episode_reward:.2f}")
+                self.episode_step = 0
+                self.episode_count += 1
                 
-                # Check if we've reached max episodes
-                if self.episode_count >= self.max_episodes:
-                    self.get_logger().info(f"Reached maximum number of episodes ({self.max_episodes}). Training complete.")
-                    final_model_path = "ddpg_auv_model_final.pt"
-                    self.agent.save_weights(final_model_path)
-                    self.get_logger().info(f"Final model saved to {final_model_path}")
-                    # Load the saved model back for inference
-                    self.agent.load_weights(final_model_path)
-                    self.training_mode = False
-                    self.get_logger().info("Switching to inference mode - controller will continue sending actions")
+                # Learning rate update feature
+                self.recent_rewards.append(self.episode_reward)
+                
+                # Keep rewards for moving average
+                if len(self.recent_rewards) > self.reward_history_window_size:
+                    self.recent_rewards.pop(0)
+                
+                # Calculate average reward
+                avg_reward = sum(self.recent_rewards) / len(self.recent_rewards)
+                
+                # Update learning rates based on performance
+                if self.training_mode:
+                    lr_updated = self.agent.update_learning_rates(self.episode_count, avg_reward)
+                    if lr_updated:
+                        self.get_logger().info(f"Episode {self.episode_count}: Learning rate decreased " +
+                                             "due to performance plateau")
+                
+                    # Save model periodically (only in training mode)
+                    if self.episode_count % self.checkpoints_save_period == 0:
+                        model_path = os.path.join(self.checkpoint_dir, f"ddpg_auv_model_ep{self.episode_count}.pt")
+                        self.agent.save_weights(model_path)
+                        
+                        self.get_logger().info(f"Model saved to {model_path}")
+                    
+                    # Check if we've reached max episodes
+                    if self.episode_count >= self.max_episodes:
+                        self.get_logger().info(f"Reached maximum number of episodes ({self.max_episodes}). " +
+                                            "Training complete.")
+                        final_model_path = "ddpg_auv_model_final.pt"
+                        self.agent.save_weights(final_model_path)
+                        
+                        self.get_logger().info(f"Final model saved to {final_model_path}")
+                        # Load the saved model back for inference
+                        self.agent.load_weights(final_model_path)
+                        self.training_mode = False
+                        self.get_logger().info("Switching to inference mode - controller will continue sending actions")
 
-            # Reset episode reward and start time
-            self.episode_reward = 0
-            self.episode_start_time = time.time()
+                # Reset episode reward and start time
+                self.episode_reward = 0
+                self.episode_start_time = time.time()
 
     def is_done(self, state):
         """Check if episode should terminate based on time/step limits only"""

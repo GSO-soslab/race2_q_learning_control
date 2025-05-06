@@ -338,6 +338,40 @@ class AUVEnv(gym.Env):
     
     def step(self, action):
         """Execute action in the environment and return next state, reward, termination flag, etc."""
+        # Get the current state BEFORE taking the action
+        current_depth_error = self.node.position_err[2:3].copy()
+        current_surge_error = self.node.v_err[0:1].copy()
+        current_sway_error = self.node.v_err[1:2].copy()
+        current_heave_error = self.node.v_err[2:3].copy()
+        current_roll_error = self.node.orientation_err[0:1].copy()
+        current_pitch_error = self.node.orientation_err[1:2].copy()
+        current_yaw_error = self.node.orientation_err[2:3].copy()
+
+        current_depth = self.node.position_state[2:3].copy()
+        current_surge = self.node.v_state[0:1].copy()
+        current_sway = self.node.v_state[1:2].copy()
+        current_heave = self.node.v_state[2:3].copy()
+        current_roll = self.node.orientation_state[0:1].copy()
+        current_pitch = self.node.orientation_state[1:2].copy()
+        current_yaw = self.node.orientation_state[2:3].copy()
+
+        current_state = np.concatenate([
+            current_depth_error,
+            current_surge_error,
+            current_sway_error,
+            current_heave_error,
+            current_roll_error,
+            current_pitch_error,
+            current_yaw_error,
+            current_depth,
+            current_surge,
+            current_sway,
+            current_heave,
+            current_roll,
+            current_pitch,
+            current_yaw
+        ])
+
         # Publish action to ROS
         thruster_cmds, servo_angles_rad = self.node.publish_action(action, self.num_thrusters, self.num_servos)
         # Store for reward calculation
@@ -396,22 +430,29 @@ class AUVEnv(gym.Env):
                 updated_yaw_error
             ])
             terminated = False
+
+            # Log if the state has changed
+            # if not np.array_equal(current_state, observation):
+            #     print("State changed!")
+            #     print("Before State:", current_state)
+            #     print("After State:", observation)
+
         else:
             print("Warning: No new state/error available, returning dummy observation")
             observation = np.zeros(14)  # Dummy observation
             terminated = True
-        
+
         # print(state_error_array)
         # Calculate reward
         reward = self.calculate_reward(state_error_array)
         if isinstance(reward, np.ndarray):
             reward = float(reward.item())
-        
+
         # Store raw reward in episode rewards list
         if not hasattr(self, 'episode_rewards'):
             self.episode_rewards = []
         self.episode_rewards.append(reward)
-        
+
         # # Normalize reward using the history of rewards
         # if len(self.episode_rewards) > 1:
         #     rewards = np.array(self.episode_rewards)
@@ -420,19 +461,19 @@ class AUVEnv(gym.Env):
         #     normalized_reward = 10 * (reward - mean) / std
         # else:
         #     normalized_reward = 10 * reward
-        
+
         # print(normalized_reward)
         # Track cumulative episode reward (using raw reward)
         self.episode_reward += reward
-        
+
         # Check if episode should end
         truncated = False
         if self.episode_step >= self.node.max_steps:
             truncated = True
-        print ("Immediate reward: ",reward)
+        # print ("Immediate reward: ",reward)
         # Increment step counter
         self.episode_step += 1
-        
+
         return observation, 100 * reward, terminated, truncated, {}
     
     def _spin_node(self, timeout_sec=0.1):

@@ -1,0 +1,56 @@
+others:
+  random_seed: 42 # Ensure you have the same random_seed
+
+environment:
+  thruster_size: 2
+  servo_joints_size: 2
+  max_action: 1.0
+  min_servo_angle_rad: -0.785 # -45 degrees in radians
+  max_servo_angle_rad: 0.785  # 45 degrees in radians
+
+training:
+  max_episodes: 1000
+  max_t: 200
+
+agent:
+  learning_rate: 0.0003
+  n_steps: 100   # Number of steps to run for each environment per update
+  n_epochs: 10     # Number of epochs to optimize the policy for each update
+  batch_size: 64   # Minibatch size
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+
+qnetwork:
+  actor_hidden_layers: [256, 256,256] # or specify pi and vf nets separately
+  # critic_hidden_layers: [256, 256] # If you want different layers for the value function
+
+reward_function:
+  w1: 1.0   # Error weight
+  w2: 0.0   # Servo smoothness
+  w3: 0.0  # Thruster usage
+  w4: 0.0  # Thruster smoothness
+  w5: 0.0  # Servo angle
+  w6: 0.0  # Thruster delta
+  w7: 0.0  # Thruster action
+  w8: 0.0  # Direction change penalty
+  state_error_weights: [
+      # 0.0,  # x
+      # 0.0,  # y
+      0.1,  # z
+      0.0,  # surge
+      0.0,  # sway
+      # 0.0,  # heave
+      0.0,  # roll
+      1.5,  # pitch
+      0.0  # yaw
+      # 0.0,  # angular_vel_x
+      # 0.0,  # angular_vel_y
+      # 0.0   # angular_vel_z
+    ]
+
+plotting:
+  plot_interval: 10
+
+evaluation:
+  num_episodes: 10
