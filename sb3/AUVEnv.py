@@ -18,7 +18,7 @@ class AUVEnvNode(Node):
         
         self.config = config
         
-        thruster_size = self.config['environment']['thruster_size']
+        self.thruster_size = self.config['environment']['thruster_size']
         servo_size = self.config['environment']['servo_joints_size']
         
         # Initialize state variables
@@ -185,9 +185,9 @@ class AUVEnvNode(Node):
         # All DOFs - modify as needed for your specific configuration
         thruster_mapping = [
             ('heave_bow', thruster_cmds[0]),
-            ('heave_stern', thruster_cmds[1])
-            # ('surge_port',  0.0 * thruster_cmds[0]),
-            # ('surge_starboard', 0.0 * thruster_cmds[1]),
+            ('heave_stern', thruster_cmds[1]),
+            ('surge_port',  thruster_cmds[2]),
+            ('surge_starboard', thruster_cmds[3])
             # ('port_servo', 0.0 *servo_angles_rad[0]),
             # ('starboard_servo',0.0 * servo_angles_rad[1])
         ]
@@ -222,8 +222,8 @@ class AUVEnvNode(Node):
         # Ensure normalized command is within [-1, 1]
         normalized_command = np.clip(normalized_command, -1.0, 1.0)
         
-        min_angle_rad = self.config['min_servo_angle_rad']
-        max_angle_rad = self.config['max_servo_angle_rad']
+        min_angle_rad = self.config['environment']['min_servo_angle_rad']
+        max_angle_rad = self.config['environment']['max_servo_angle_rad']
         # Map from [-1, 1] to [min_angle_rad, max_angle_rad]
         angle_rad = min_angle_rad + (normalized_command + 1.0) * (max_angle_rad - min_angle_rad) / 2.0
         
@@ -237,7 +237,7 @@ class AUVEnv(gym.Env):
         super(AUVEnv, self).__init__()
         
         # Load configuration
-        config_path = os.path.join(os.path.dirname(__file__), 'config', 'config_ddpg.yaml')
+        config_path = os.path.join(os.path.dirname(__file__), 'config', 'config_sac.yaml')
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
         
@@ -251,7 +251,6 @@ class AUVEnv(gym.Env):
         # Set up action and observation spaces
         thruster_size = self.config['environment']['thruster_size']
         servo_size = self.config['environment']['servo_joints_size']
-        
         self.num_thrusters = thruster_size
         self.num_servos = servo_size
         
@@ -541,7 +540,9 @@ class AUVEnv(gym.Env):
         # Thruster usage penalty
         u_t = np.array([
             self.node.thrust_heave_bow,
-            self.node.thrust_heave_stern
+            self.node.thrust_heave_stern,
+            self.node.thrust_surge_port,
+            self.node.thrust_surge_starboard
         ])
         thruster_usage_penalty = np.sum(np.abs(u_t))
 
