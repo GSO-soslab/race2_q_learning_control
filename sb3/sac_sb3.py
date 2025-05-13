@@ -146,7 +146,7 @@ def main():
         # Option 2: Try to log to the same directory (more complex to manage)
         # log_dir = os.path.dirname(os.path.dirname(args.resume_from_checkpoint)) # e.g. logs/sac_XXXX
     else:
-        log_dir = os.path.join("logs", f"sac_new_{timestamp}")
+        log_dir = os.path.join("logs", f"sac_{timestamp}")
     os.makedirs(log_dir, exist_ok=True)
     print(f"Logging to: {log_dir}")
 
@@ -239,7 +239,7 @@ def main():
                 model.learn(
                     total_timesteps=total_timesteps, # This is the CUMULATIVE total
                     callback=[checkpoint_callback, plot_callback],
-                    log_interval=10, # Log every N rollouts/episodes (depends on n_envs)
+                    log_interval=1, # Log every N rollouts/episodes (depends on n_envs)
                     reset_num_timesteps=False # IMPORTANT: Do NOT reset timesteps when resuming
                 )
 
@@ -298,7 +298,7 @@ def main():
             while not (terminated or truncated):
                 # Pass only the observation array to model.predict()
                 action, _ = model.predict(obs, deterministic=True)
-
+                # action, _ = env.last_action
                 # Correctly unpack the return from env.step()
                 next_obs, reward, terminated, truncated, info = env.step(action)
                 

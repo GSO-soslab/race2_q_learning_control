@@ -185,7 +185,7 @@ class AUVEnvNode(Node):
         # All DOFs - modify as needed for your specific configuration
         thruster_mapping = [
             ('heave_bow', thruster_cmds[0]),
-            ('heave_stern', thruster_cmds[1]),
+            ('heave_stern',  thruster_cmds[1]),
             ('surge_port',  thruster_cmds[2]),
             ('surge_starboard', thruster_cmds[3])
             # ('port_servo', 0.0 *servo_angles_rad[0]),
@@ -296,7 +296,7 @@ class AUVEnv(gym.Env):
         zero_thruster_cmds = np.zeros(self.num_thrusters)  
         zero_servo_angles_rad = np.zeros(self.num_servos)  
         zero_action = np.zeros(self.num_thrusters + self.num_servos)  
-        self.node.publish_action(zero_action, self.num_thrusters, self.num_servos)    
+        # self.node.publish_action(zero_action, self.num_thrusters, self.num_servos)    
         depth = self.node.position_state[2:3]
         surge = self.node.v_state[0:1]     
         sway = self.node.v_state[1:2]      
@@ -317,14 +317,14 @@ class AUVEnv(gym.Env):
         # Create initial observation
         initial_observation = np.concatenate([
             depth_error, 
-            surge_error, 
+            20 * surge_error, 
             sway_error,
             heave_error, 
             roll_error, 
             pitch_error, 
             yaw_error,  
             depth, 
-            surge, 
+            20 * surge, 
             sway,
             heave, 
             roll, 
@@ -337,6 +337,9 @@ class AUVEnv(gym.Env):
     
     def step(self, action):
         """Execute action in the environment and return next state, reward, termination flag, etc."""
+
+        state_error_array = None
+
         # Get the current state BEFORE taking the action
         current_depth_error = self.node.position_err[2:3].copy()
         current_surge_error = self.node.v_err[0:1].copy()
@@ -353,7 +356,6 @@ class AUVEnv(gym.Env):
         current_roll = self.node.orientation_state[0:1].copy()
         current_pitch = self.node.orientation_state[1:2].copy()
         current_yaw = self.node.orientation_state[2:3].copy()
-
         current_state = np.concatenate([
             current_depth_error,
             current_surge_error,
@@ -373,17 +375,18 @@ class AUVEnv(gym.Env):
 
         # Publish action to ROS
         thruster_cmds, servo_angles_rad = self.node.publish_action(action, self.num_thrusters, self.num_servos)
+        # thruster_cmds = [self.node.thrust_heave_bow ,self.node.thrust_heave_stern, self.node.thrust_surge_port , self.node.thrust_surge_starboard]
         # Store for reward calculation
         self.thruster_action = thruster_cmds
         self.joint_angles = servo_angles_rad
         self.last_action = action.copy()
         # Wait for callbacks to be processed
-        timeout_sec = 1
+        timeout_sec = 0.8
         start_time = time.time()
         # time.sleep(1.0)
         # Process ROS events to handle callbacks
         while not (self.node.new_state_available and self.node.new_error_available):
-            self._spin_node(timeout_sec=0.998)
+            self._spin_node(timeout_sec=0.7)
             if time.time() - start_time > timeout_sec:
                 print("Warning: Timeout waiting for state/error updates")
                 break
@@ -405,20 +408,21 @@ class AUVEnv(gym.Env):
             updated_yaw_error = self.node.orientation_err[2:3]
             observation = np.concatenate([
                 updated_depth_error,
-                updated_surge_error,
+                20 * updated_surge_error,
                 updated_sway_error,
                 updated_heave_error,
                 updated_roll_error,
                 updated_pitch_error,
                 updated_yaw_error,
                 updated_depth,
-                updated_surge,
+                20 * updated_surge,
                 updated_sway,
                 updated_heave,
                 updated_roll,
                 updated_pitch,
                 updated_yaw
             ])
+            # sureg is not multiplied by 10 for error cause reward adds the weight itself 
             state_error_array = np.concatenate([
                 updated_depth_error,
                 updated_surge_error,
@@ -428,6 +432,10 @@ class AUVEnv(gym.Env):
                 updated_pitch_error,
                 updated_yaw_error
             ])
+
+            if state_error_array is None:
+                state_error_array = np.zeros(len(state_error_array))
+
             terminated = False
 
             # Log if the state has changed
@@ -441,7 +449,6 @@ class AUVEnv(gym.Env):
             observation = np.zeros(14)  # Dummy observation
             terminated = True
 
-        # print(state_error_array)
         # Calculate reward
         reward = self.calculate_reward(state_error_array)
         if isinstance(reward, np.ndarray):
@@ -473,7 +480,7 @@ class AUVEnv(gym.Env):
         # Increment step counter
         self.episode_step += 1
 
-        return observation, 100 * reward, terminated, truncated, {}
+        return observation, reward, terminated, truncated, {}
     
     def _spin_node(self, timeout_sec=0.1):
         """Process ROS callbacks for a limited time"""
@@ -481,12 +488,14 @@ class AUVEnv(gym.Env):
         while time.time() < end_time:
             rclpy.spin_once(self.node, timeout_sec=0.01)
     
-    def calculate_reward(self,state_error_array):
-        """Calculate reward based on specified error components"""
+    def calculate_reward(self, state_error_array):
+        """Calculate reward with individual PID components for each error term"""
         w = self.config['reward_function']
         w1, w2, w3, w4, w5, w6, w7, w8 = w['w1'], w['w2'], w['w3'], w['w4'], w['w5'], w['w6'], w['w7'], w['w8']
         state_error_weights = np.array(w['state_error_weights'])
-        
+
+        # Extract error
+        error = state_error_array
         # Extract specific error components
         # error = np.concatenate([
         #     self.node.position_err[2:3],  # Depth
@@ -494,6 +503,8 @@ class AUVEnv(gym.Env):
         #     self.node.orientation_err[:3], # roll, pitch, yaw
         # ]).astype(np.float32)
         error = state_error_array
+        if error is None:
+            error = np.zeros(len(state_error_weights))
         # # Compute performance error (quadratic penalty)
         # error_column = error.reshape(-1, 1)
         # # performance_error = np.dot(error, np.diag(state_error_weights))
@@ -512,8 +523,76 @@ class AUVEnv(gym.Env):
         
         performance_error = error_row @ weights_diag @ error_column
         performance_error = -performance_error
-        # print(performance_error)
+        # # Initialize PID tracking structures if they don’t exist
+        # if not hasattr(self, 'error_integral'):
+        #     self.error_integral = np.zeros_like(error)
+        #     self.prev_error = np.zeros_like(error)
 
+        # # Read PID gain multipliers from config
+        # pid_config = w['pid_gains']
+        # p_mult = pid_config['P_multiplier']
+        # i_mult = pid_config['I_multiplier']
+        # d_mult = pid_config['D_multiplier']
+
+        # # Set base PID gains using config multipliers
+        # self.pid_gains = {
+        #     'P': state_error_weights * p_mult,
+        #     'I': state_error_weights * i_mult,
+        #     'D': state_error_weights * d_mult
+        # }
+
+        # # # Optional: Apply component-specific multipliers if configured
+        # # if 'component_multipliers' in pid_config:
+        # #     comp_mults = pid_config['component_multipliers']
+        # #     # Map component names to indices in the state error array
+        # #     component_indices = {
+        # #         'z': 0,      # Assuming z is the first component
+        # #         'surge': 1,  # Assuming surge is the second component
+        # #         'sway': 2,   # etc.
+        # #         'roll': 3,
+        # #         'pitch': 4,
+        # #         'yaw': 5
+        # #     }
+
+        #     # # Apply component-specific multipliers
+        #     # for comp_name, multipliers in comp_mults.items():
+        #     #     if comp_name in component_indices:
+        #     #         idx = component_indices[comp_name]
+        #     #         if idx < len(error) and len(multipliers) == 3:
+        #     #             self.pid_gains[‘P’][idx] = state_error_weights[idx] * multipliers[0]
+        #     #             self.pid_gains[‘I’][idx] = state_error_weights[idx] * multipliers[1]
+        #     #             self.pid_gains[‘D’][idx] = state_error_weights[idx] * multipliers[2]       
+        #     #      
+
+        
+        # # === CALCULATE PID COMPONENTS FOR EACH ERROR TERM ===
+        # # Initialize arrays to store individual PID terms
+        # p_terms = np.zeros_like(error)
+        # i_terms = np.zeros_like(error)
+        # d_terms = np.zeros_like(error)
+        
+        # # Calculate terms for each error component
+        # for i in range(len(error)):
+        #     # Proportional term - current error
+        #     p_terms[i] = -(error[i]**2) * self.pid_gains['P'][i]
+            
+        #     # Integral term - accumulated error with decay
+        #     integral_decay = 0.95  # Prevent integral windup
+        #     self.error_integral[i] = self.error_integral[i] * integral_decay + error[i]
+        #     i_terms[i] = -(self.error_integral[i]**2) * self.pid_gains['I'][i]
+            
+        #     # Differential term - rate of change of error
+        #     error_diff = error[i] - self.prev_error[i]
+        #     d_terms[i] = -(error_diff**2) * self.pid_gains['D'][i]
+        
+        # # Store current error for next iteration's differential calculation
+        # self.prev_error = error.copy()
+        
+        # # === COMBINE PID TERMS ===
+        # # Sum individual PID components
+        # pid_reward = np.sum(p_terms) + np.sum(i_terms) + np.sum(d_terms)
+        
+        # === EXISTING PENALTY TERMS (unchanged) ===
         # Servo smoothness penalty using sine and cosine components
         servo_smoothness_penalty = 0
         delta_theta = np.zeros(self.num_servos)
@@ -570,9 +649,11 @@ class AUVEnv(gym.Env):
         # Thruster Direction Change Penalty
         direction_change_penalty = w8 * thruster_action_penalty ** 2  # Quadratic penalty
 
-        # Total reward
+        # === FINAL REWARD CALCULATION ===
+        # Replace w1 * performance_error with pid_reward
         reward = -(
-            -w1 * performance_error +  # positive without exponential
+            # -w1 * pid_reward +  
+            -w1 * performance_error +
             w2 * servo_smoothness_penalty +
             w3 * thruster_usage_penalty +
             w4 * thruster_smoothness_penalty +
@@ -582,8 +663,11 @@ class AUVEnv(gym.Env):
             w8 * direction_change_penalty
         )
         
+        # Optional: add diagnostic logging
+        # if hasattr(self, 'step_count') and self.step_count % 100 == 0:
+            # print(f"Step {self.step_count} | P: {np.sum(p_terms):.4f} | I: {np.sum(i_terms):.4f} | D: {np.sum(d_terms):.4f}")
+        
         return reward
-
 
     # def calculate_reward(self, state_error_array):
     #     """

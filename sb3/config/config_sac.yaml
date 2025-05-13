@@ -14,7 +14,7 @@ training:
   save_freq_timesteps: 10
 
 agent:
-  learning_rate: 0.0003
+  learning_rate: 0.00009
   buffer_size: 1000000
   batch_size: 128
   gamma: 0.99
@@ -39,21 +39,38 @@ reward_function:
   state_error_weights: [
       # 0.0,  # x
       # 0.0,  # y
-      0.1,  # z
-      1.5,  # surge
-      0.0,  # sway
+      0.5,  # z
+      15.0,  # surge
+      8.0,  # sway
       0.0,  # heave
       0.0,  # roll
-      1.5,  # pitch
-      1.5  # yaw
+      1.1,  # pitch
+      0.8  # yaw
       # 0.0,  # angular_vel_x
       # 0.0,  # angular_vel_y
       # 0.0   # angular_vel_z
     ]
 
+  pid_gains:
+    # These are multipliers on top of state_error_weights
+    P_multiplier: 1.0     # Base proportional gain multiplier
+    I_multiplier: 1.0     # Base integral gain multiplier
+    D_multiplier: 0.0     # Base derivative gain multiplier
+    component_multipliers:
+      # z:         [1.0, 0.2, 0.0]  # [P, I, D] for depth
+      # surge:     [1.0, 0.1, 0.0]  # [P, I, D] for surge
+      # # sway:      [1.0, 0.1, 0.0]  # [P, I, D] for sway
+      # # roll:      [1.0, 0.05, 0.0] # [P, I, D] for roll
+      # pitch:     [1.0, 0.05, 0.0] # [P, I, D] for pitch
+      # yaw:       [1.0, 0.2, 0.0]  # [P, I, D] for yaw
+      z:      [1.0, 1.0, 0.0]  
+      surge:  [1.0, 1.8, 0.0]  
+      pitch:  [1.0, 0.05, 0.0]
+      yaw:    [1.0, 1.5, 0.0]
+
 plotting:
   plot_interval: 10
 
 evaluation:
-  num_episodes: 10
+  num_episodes: 10000
   verbose: true
