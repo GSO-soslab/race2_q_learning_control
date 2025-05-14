@@ -127,8 +127,8 @@ def main():
     # Set random seed
     random_seed = config['others']['random_seed']
     np.random.seed(random_seed)
-    th.manual_seed(random_seed)
-    # th.cuda.manual_seed_all(random_seed) # if using CUDA
+    # th.manual_seed(random_seed)
+    th.cuda.manual_seed_all(random_seed) # if using CUDA
 
     # Create environment
     env = AUVEnv()

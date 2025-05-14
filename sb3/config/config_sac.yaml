@@ -14,7 +14,7 @@ training:
   save_freq_timesteps: 10
 
 agent:
-  learning_rate: 0.00009
+  learning_rate: 0.0001
   buffer_size: 1000000
   batch_size: 128
   gamma: 0.99
@@ -39,9 +39,9 @@ reward_function:
   state_error_weights: [
       # 0.0,  # x
       # 0.0,  # y
-      0.5,  # z
-      15.0,  # surge
-      8.0,  # sway
+      0.1,  # z
+      10.0,  # surge
+      3.0,  # sway
       0.0,  # heave
       0.0,  # roll
       1.1,  # pitch
@@ -63,10 +63,10 @@ reward_function:
       # # roll:      [1.0, 0.05, 0.0] # [P, I, D] for roll
       # pitch:     [1.0, 0.05, 0.0] # [P, I, D] for pitch
       # yaw:       [1.0, 0.2, 0.0]  # [P, I, D] for yaw
-      z:      [1.0, 1.0, 0.0]  
-      surge:  [1.0, 1.8, 0.0]  
-      pitch:  [1.0, 0.05, 0.0]
-      yaw:    [1.0, 1.5, 0.0]
+      z:      [1.0, 0.0, 0.0]  
+      surge:  [1.0, 0.0, 0.0]  
+      pitch:  [1.0, 0.0, 0.0]
+      yaw:    [1.0, 0.0, 0.0]
 
 plotting:
   plot_interval: 10
