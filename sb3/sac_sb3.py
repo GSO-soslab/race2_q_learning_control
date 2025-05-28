@@ -21,6 +21,76 @@ import gym
 # Import custom environment
 from AUVEnv import AUVEnv
 
+class WeightUpdateInspectCallback(BaseCallback):
+    """
+    Callback to inspect if network weights are changing.
+    Checks a sample weight from actor and critic.
+    """
+    def __init__(self, check_freq: int, verbose: int = 0):
+        super(WeightUpdateInspectCallback, self).__init__(verbose)
+        self.check_freq = check_freq
+        self.actor_weight_prev = None
+        self.critic_weight_prev = None
+        # It's good practice to check a specific layer, e.g., the first linear layer's weights
+        # Or just the first parameter overall.
+
+    def _on_step(self) -> bool:
+        # self.n_calls is the number of times this callback's _on_step has been called
+        # self.num_timesteps is the total number of environment steps collected so far
+        # SAC updates happen every `train_freq` steps, and perform `gradient_steps` updates.
+        # We'll check periodically based on `self.num_timesteps` or `self.n_calls`.
+        # Let's use self.n_calls for simplicity with the callback's check_freq.
+
+        if self.n_calls % self.check_freq == 0:
+            if self.verbose > 0:
+                print(f"\n--- Weight Inspection at Timestep: {self.num_timesteps} (Callback Call: {self.n_calls}) ---")
+
+            # --- Actor Weights ---
+            # Access actor parameters (weights and biases)
+            actor_params = list(self.model.policy.actor.parameters())
+            if actor_params: # Check if actor has parameters
+                # Get a sample weight (e.g., first element of the first parameter tensor)
+                # .data is important to get the tensor data, not the Parameter object
+                # .clone().detach().cpu().numpy() is to safely convert to numpy for comparison
+                current_actor_weight_sample = actor_params[0].data.clone().detach().cpu().numpy().flatten()[0]
+
+                if self.actor_weight_prev is not None:
+                    if not np.isclose(self.actor_weight_prev, current_actor_weight_sample):
+                        if self.verbose > 0:
+                            print(f"Actor weights HAVE changed. Sample: {self.actor_weight_prev:.6f} -> {current_actor_weight_sample:.6f}")
+                    else:
+                        if self.verbose > 0:
+                            print(f"Actor weights (sample) appear UNCHANGED: {current_actor_weight_sample:.6f}")
+                elif self.verbose > 0:
+                    print(f"Actor initial weight sample: {current_actor_weight_sample:.6f}")
+                self.actor_weight_prev = current_actor_weight_sample
+            else:
+                if self.verbose > 0:
+                    print("Actor has no parameters to check.")
+
+
+            # --- Critic Weights ---
+            # Access critic parameters
+            critic_params = list(self.model.policy.critic.parameters())
+            if critic_params:
+                current_critic_weight_sample = critic_params[0].data.clone().detach().cpu().numpy().flatten()[0]
+                if self.critic_weight_prev is not None:
+                    if not np.isclose(self.critic_weight_prev, current_critic_weight_sample):
+                        if self.verbose > 0:
+                            print(f"Critic weights HAVE changed. Sample: {self.critic_weight_prev:.6f} -> {current_critic_weight_sample:.6f}")
+                    else:
+                        if self.verbose > 0:
+                            print(f"Critic weights (sample) appear UNCHANGED: {current_critic_weight_sample:.6f}")
+                elif self.verbose > 0:
+                    print(f"Critic initial weight sample: {current_critic_weight_sample:.6f}")
+                self.critic_weight_prev = current_critic_weight_sample
+            else:
+                if self.verbose > 0:
+                    print("Critic has no parameters to check.")
+            if self.verbose > 0:
+                print("--- End Weight Inspection ---")
+        return True
+    
 class RewardPlottingCallback(BaseCallback):
     """
     Custom callback for plotting rewards during training
@@ -223,6 +293,8 @@ def main():
             verbose=1
         )
 
+        weight_inspect_callback = WeightUpdateInspectCallback(check_freq=100, verbose=1) 
+
         # Determine total timesteps
         if args.timesteps:
             total_timesteps = args.timesteps
@@ -238,7 +310,7 @@ def main():
             try:
                 model.learn(
                     total_timesteps=total_timesteps, # This is the CUMULATIVE total
-                    callback=[checkpoint_callback, plot_callback],
+                    callback=[checkpoint_callback, plot_callback,weight_inspect_callback],
                     log_interval=1, # Log every N rollouts/episodes (depends on n_envs)
                     reset_num_timesteps=False # IMPORTANT: Do NOT reset timesteps when resuming
                 )

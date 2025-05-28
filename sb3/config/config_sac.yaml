@@ -14,7 +14,7 @@ training:
   save_freq_timesteps: 10
 
 agent:
-  learning_rate: 0.0001
+  learning_rate: 0.0003
   buffer_size: 1000000
   batch_size: 128
   gamma: 0.99
@@ -24,33 +24,60 @@ agent:
   # replay_buffer_kwargs: # Optional arguments for the replay buffer
 
 qnetwork:
-  actor_hidden_layers: [128, 128, 128]
+  actor_hidden_layers: [256, 256, 256]
   # critic_hidden_layers: [128, 128, 128]
 
 reward_function:
   w1: 1.0   # Error weight
   w2: 0.0   # Servo smoothness
   w3: 0.0  # Thruster usage
-  w4: 0.01  # Thruster smoothness
+  w4: 0.1  # Thruster smoothness
   w5: 0.0  # Servo angle
   w6: 0.0  # Thruster delta
   w7: 0.0  # Thruster action
   w8: 0.0  # Direction change penalty
-  state_error_weights: [
-      # 0.0,  # x
-      # 0.0,  # y
-      0.1,  # z
-      15.0,  # surge
-      8.0,  # sway
-      0.0,  # heave
-      0.0,  # roll
-      1.1,  # pitch
-      0.8  # yaw
-      # 0.0,  # angular_vel_x
-      # 0.0,  # angular_vel_y
-      # 0.0   # angular_vel_z
-    ]
+  # state_error_weights: [
+  #     # 0.0,  # x
+  #     # 0.0,  # y
+  #     0.1,  # z
+  #     15.0,  # surge
+  #     8.0,  # sway
+  #     0.0,  # heave
+  #     0.0,  # roll
+  #     1.1,  # pitch
+  #     0.8  # yaw
+  #     # 0.0,  # angular_vel_x
+  #     # 0.0,  # angular_vel_y
+  #     # 0.0   # angular_vel_z
+  #   ]
+  # state_error_weights: [
+  #     # 0.0, # x
+  #     # 0.0, # y
+  #     1.0,  # z (depth)
+  #     15.0, # surge
+  #     0.0,  # sway
+  #     0.0,  # heave
+  #     0.0,  # quat_x
+  #     1.1,  # quat_y (roughly corresponds to pitch-like rotation)
+  #     0.8,  # quat_z (roughly corresponds to yaw-like rotation)
+  #     0.0,  # quat_w
+  #     # 0.0, # angular_vel_x
+  #     # 0.0, # angular_vel_y
+  #     # 0.0  # angular_vel_z
+  #   ]
 
+  state_error_weights: [
+      # Error array: [depth_err, surge_err, sway_err, heave_vel_err, qx_err, qy_err, qz_err, qw_err]
+      2.0,  # depth_err (increase slightly, or keep 1.0 and scale others down)
+      5.0,  # surge_err (reduce significantly from 15.0)
+      0.5,  # sway_err (reduce significantly from 8.0, AUV has low sway authority)
+      0.5,  # heave_vel_err (add small weight for damping)
+      0.1,  # qx_err (roll-like, small weight if any control)
+      2.0,  # qy_err (pitch-like, comparable to depth or surge)
+      1.5,  # qz_err (yaw-like)
+      0.0,  # qw_err (always 0)
+    ]
+    
   pid_gains:
     # These are multipliers on top of state_error_weights
     P_multiplier: 1.0     # Base proportional gain multiplier
@@ -63,10 +90,10 @@ reward_function:
       # # roll:      [1.0, 0.05, 0.0] # [P, I, D] for roll
       # pitch:     [1.0, 0.05, 0.0] # [P, I, D] for pitch
       # yaw:       [1.0, 0.2, 0.0]  # [P, I, D] for yaw
-      z:      [1.0, 1.0, 0.0]  
-      surge:  [1.0, 1.8, 0.0]  
-      pitch:  [1.0, 0.05, 0.0]
-      yaw:    [1.0, 1.5, 0.0]
+      z:      [1.0, 0.0, 0.0]  
+      surge:  [1.0, 0.0, 0.0]  
+      pitch:  [1.0, 0.0, 0.0]
+      yaw:    [1.0, 0.0, 0.0]
 
 plotting:
   plot_interval: 10

@@ -9,6 +9,7 @@ from geometry_msgs.msg import TwistStamped
 from mvp_msgs.msg import ControlProcess
 import yaml
 from rclpy.clock import Clock
+from scipy.spatial.transform import Rotation as R
 
 class AUVEnvNode(Node):
     """Node to handle ROS2 communications for the AUV environment"""
@@ -110,20 +111,25 @@ class AUVEnvNode(Node):
         self.get_logger().debug("Error callback triggered!")
         self.last_error_timestamp = time.time()
         self.position_err = np.array([data.position.x, data.position.y, data.position.z])
-        self.orientation_err = np.array([data.orientation.x, data.orientation.y, data.orientation.z])
+        
+        # Convert Euler angles to quaternion
+        euler_err = np.array([data.orientation.x, data.orientation.y, data.orientation.z])
+        rotation_err = R.from_euler('xyz', euler_err)
+        self.orientation_err = rotation_err.as_quat()  # Returns [x, y, z, w]
+        
         self.v_err = np.array([data.velocity.x, data.velocity.y, data.velocity.z])
         self.omega_ref_err = np.array([data.angular_rate.x, data.angular_rate.y, data.angular_rate.z])
         
         self.state_err = np.concatenate([
             self.position_err[2:3],
             self.v_err[:2],
-            self.orientation_err[:3],
+            self.orientation_err[:4],  # All 4 quaternion components
             self.omega_ref_err[:3],
         ])
         
         if hasattr(self, 'last_action_timestamp') and self.last_error_timestamp > self.last_action_timestamp:
             self.new_error_available = True
-    
+
     def state_callback(self, data):
         """Process state updates from sensors"""
         self.get_logger().debug("State callback triggered!")
@@ -132,7 +138,12 @@ class AUVEnvNode(Node):
         
         # Extract state values
         self.position_state = np.array([data.position.x, data.position.y, data.position.z])
-        self.orientation_state = np.array([data.orientation.x, data.orientation.y, data.orientation.z])
+        
+        # Convert Euler angles to quaternion
+        euler_state = np.array([data.orientation.x, data.orientation.y, data.orientation.z])
+        rotation_state = R.from_euler('xyz', euler_state)
+        self.orientation_state = rotation_state.as_quat()  # Returns [x, y, z, w]
+        
         self.v_state = np.array([data.velocity.x, data.velocity.y, data.velocity.z])
         self.omega_ref_state = np.array([data.angular_rate.x, data.angular_rate.y, data.angular_rate.z])
         
@@ -140,7 +151,7 @@ class AUVEnvNode(Node):
         self.current_state = np.concatenate([
             self.position_state[2:3],
             self.v_state[:2],
-            self.orientation_state[:3],
+            self.orientation_state[:4],  # All 4 quaternion components
         ])
         
         # Flag indicating we have a new state after the last action
@@ -264,10 +275,9 @@ class AUVEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=-np.inf, 
             high=np.inf, 
-            shape=(14,),  # state dimension
+            shape=(16,),  # state dimension
             dtype=np.float32
         )
-        
         # Initialize episode-related variables
         self.episode_step = 0
         self.episode_reward = 0.0
@@ -301,40 +311,48 @@ class AUVEnv(gym.Env):
         surge = self.node.v_state[0:1]     
         sway = self.node.v_state[1:2]      
         heave = self.node.v_state[2:3]        
-        roll = self.node.orientation_state[0:1]         
-        pitch = self.node.orientation_state[1:2]         
-        yaw = self.node.orientation_state[2:3]           
+        
+        # Extract quaternion components (now 4 values instead of 3 Euler angles)
+        quat_x = self.node.orientation_state[0:1]         
+        quat_y = self.node.orientation_state[1:2]         
+        quat_z = self.node.orientation_state[2:3]
+        quat_w = self.node.orientation_state[3:4]           
 
         # Extract error variables
         depth_error = self.node.position_err[2:3]        
         surge_error = self.node.v_err[0:1]   
         sway_error = self.node.v_err[1:2]       
         heave_error = self.node.v_err[2:3]      
-        roll_error = self.node.orientation_err[0:1]     
-        pitch_error = self.node.orientation_err[1:2]     
-        yaw_error = self.node.orientation_err[2:3]    
+        
+        # Extract quaternion error components (now 4 values instead of 3 Euler angles)
+        quat_x_error = self.node.orientation_err[0:1]     
+        quat_y_error = self.node.orientation_err[1:2]     
+        quat_z_error = self.node.orientation_err[2:3]
+        quat_w_error = self.node.orientation_err[3:4]    
 
         # Create initial observation
         initial_observation = np.concatenate([
             depth_error, 
-            20 * surge_error, 
+            surge_error, 
             sway_error,
             heave_error, 
-            roll_error, 
-            pitch_error, 
-            yaw_error,  
+            quat_x_error, 
+            quat_y_error, 
+            quat_z_error,
+            quat_w_error,  
             depth, 
-            20 * surge, 
+            surge, 
             sway,
             heave, 
-            roll, 
-            pitch, 
-            yaw           
+            quat_x, 
+            quat_y, 
+            quat_z,
+            quat_w           
         ])
 
         info = {}
         return initial_observation, info
-    
+
     def step(self, action):
         """Execute action in the environment and return next state, reward, termination flag, etc."""
 
@@ -345,32 +363,41 @@ class AUVEnv(gym.Env):
         current_surge_error = self.node.v_err[0:1].copy()
         current_sway_error = self.node.v_err[1:2].copy()
         current_heave_error = self.node.v_err[2:3].copy()
-        current_roll_error = self.node.orientation_err[0:1].copy()
-        current_pitch_error = self.node.orientation_err[1:2].copy()
-        current_yaw_error = self.node.orientation_err[2:3].copy()
+        
+        # Current quaternion error components
+        current_quat_x_error = self.node.orientation_err[0:1].copy()
+        current_quat_y_error = self.node.orientation_err[1:2].copy()
+        current_quat_z_error = self.node.orientation_err[2:3].copy()
+        current_quat_w_error = self.node.orientation_err[3:4].copy()
 
         current_depth = self.node.position_state[2:3].copy()
         current_surge = self.node.v_state[0:1].copy()
         current_sway = self.node.v_state[1:2].copy()
         current_heave = self.node.v_state[2:3].copy()
-        current_roll = self.node.orientation_state[0:1].copy()
-        current_pitch = self.node.orientation_state[1:2].copy()
-        current_yaw = self.node.orientation_state[2:3].copy()
+        
+        # Current quaternion state components
+        current_quat_x = self.node.orientation_state[0:1].copy()
+        current_quat_y = self.node.orientation_state[1:2].copy()
+        current_quat_z = self.node.orientation_state[2:3].copy()
+        current_quat_w = self.node.orientation_state[3:4].copy()
+        
         current_state = np.concatenate([
             current_depth_error,
             current_surge_error,
             current_sway_error,
             current_heave_error,
-            current_roll_error,
-            current_pitch_error,
-            current_yaw_error,
+            current_quat_x_error,
+            current_quat_y_error,
+            current_quat_z_error,
+            current_quat_w_error,
             current_depth,
             current_surge,
             current_sway,
             current_heave,
-            current_roll,
-            current_pitch,
-            current_yaw
+            current_quat_x,
+            current_quat_y,
+            current_quat_z,
+            current_quat_w
         ])
 
         # Publish action to ROS
@@ -381,12 +408,12 @@ class AUVEnv(gym.Env):
         self.joint_angles = servo_angles_rad
         self.last_action = action.copy()
         # Wait for callbacks to be processed
-        timeout_sec = 0.5
+        timeout_sec = 0.1
         start_time = time.time()
         # time.sleep(1.0)
         # Process ROS events to handle callbacks
         while not (self.node.new_state_available and self.node.new_error_available):
-            self._spin_node(timeout_sec=0.3)
+            self._spin_node(timeout_sec=0.098)
             if time.time() - start_time > timeout_sec:
                 print("Warning: Timeout waiting for state/error updates")
                 break
@@ -396,31 +423,41 @@ class AUVEnv(gym.Env):
             updated_surge = self.node.v_state[0:1]
             updated_sway = self.node.v_state[1:2]
             updated_heave = self.node.v_state[2:3]
-            updated_roll = self.node.orientation_state[0:1]
-            updated_pitch = self.node.orientation_state[1:2]
-            updated_yaw = self.node.orientation_state[2:3]
+            
+            # Updated quaternion state components
+            updated_quat_x = self.node.orientation_state[0:1]
+            updated_quat_y = self.node.orientation_state[1:2]
+            updated_quat_z = self.node.orientation_state[2:3]
+            updated_quat_w = self.node.orientation_state[3:4]
+            
             updated_depth_error = self.node.position_err[2:3]
             updated_surge_error = self.node.v_err[0:1]
             updated_sway_error = self.node.v_err[1:2]
             updated_heave_error = self.node.v_err[2:3]
-            updated_roll_error = self.node.orientation_err[0:1]
-            updated_pitch_error = self.node.orientation_err[1:2]
-            updated_yaw_error = self.node.orientation_err[2:3]
+            
+            # Updated quaternion error components
+            updated_quat_x_error = self.node.orientation_err[0:1]
+            updated_quat_y_error = self.node.orientation_err[1:2]
+            updated_quat_z_error = self.node.orientation_err[2:3]
+            updated_quat_w_error = self.node.orientation_err[3:4]
+            
             observation = np.concatenate([
                 updated_depth_error,
-                20 * updated_surge_error,
+                updated_surge_error,
                 updated_sway_error,
                 updated_heave_error,
-                updated_roll_error,
-                updated_pitch_error,
-                updated_yaw_error,
+                updated_quat_x_error,
+                updated_quat_y_error,
+                updated_quat_z_error,
+                updated_quat_w_error,
                 updated_depth,
-                20 * updated_surge,
+                updated_surge,
                 updated_sway,
                 updated_heave,
-                updated_roll,
-                updated_pitch,
-                updated_yaw
+                updated_quat_x,
+                updated_quat_y,
+                updated_quat_z,
+                updated_quat_w
             ])
             # sureg is not multiplied by 10 for error cause reward adds the weight itself 
             state_error_array = np.concatenate([
@@ -428,9 +465,10 @@ class AUVEnv(gym.Env):
                 updated_surge_error,
                 updated_sway_error,
                 updated_heave_error,
-                updated_roll_error,
-                updated_pitch_error,
-                updated_yaw_error
+                updated_quat_x_error,
+                updated_quat_y_error,
+                updated_quat_z_error,
+                updated_quat_w_error
             ])
 
             if state_error_array is None:
@@ -446,7 +484,7 @@ class AUVEnv(gym.Env):
 
         else:
             print("Warning: No new state/error available, returning dummy observation")
-            observation = np.zeros(14)  # Dummy observation
+            observation = np.zeros(16)  # Updated from 14 to 16 (added 2 more quaternion components)
             terminated = True
 
         # Calculate reward
