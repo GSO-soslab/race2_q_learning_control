@@ -14,7 +14,7 @@ training:
   save_freq_timesteps: 10
 
 agent:
-  learning_rate: 0.00009
+  learning_rate: 0.0003
   buffer_size: 1000000
   batch_size: 128
   gamma: 0.99
@@ -31,7 +31,7 @@ reward_function:
   w1: 1.0   # Error weight
   w2: 0.0   # Servo smoothness
   w3: 0.0  # Thruster usage
-  w4: 0.0  # Thruster smoothness
+  w4: 1.0  # Thruster smoothness
   w5: 0.0  # Servo angle
   w6: 0.0  # Thruster delta
   w7: 0.0  # Thruster action
@@ -63,10 +63,10 @@ reward_function:
       # # roll:      [1.0, 0.05, 0.0] # [P, I, D] for roll
       # pitch:     [1.0, 0.05, 0.0] # [P, I, D] for pitch
       # yaw:       [1.0, 0.2, 0.0]  # [P, I, D] for yaw
-      z:      [1.0, 1.0, 0.0]  
-      surge:  [1.0, 1.8, 0.0]  
-      pitch:  [1.0, 0.05, 0.0]
-      yaw:    [1.0, 1.5, 0.0]
+      z:      [1.0, 0.0, 0.0]  
+      surge:  [1.0, 0.0, 0.1]  
+      pitch:  [1.0, 0.0, 0.1]
+      yaw:    [1.0, 0.0, 0.1]
 
 plotting:
   plot_interval: 10
