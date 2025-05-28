@@ -381,12 +381,12 @@ class AUVEnv(gym.Env):
         self.joint_angles = servo_angles_rad
         self.last_action = action.copy()
         # Wait for callbacks to be processed
-        timeout_sec = 0.8
+        timeout_sec = 0.5
         start_time = time.time()
         # time.sleep(1.0)
         # Process ROS events to handle callbacks
         while not (self.node.new_state_available and self.node.new_error_available):
-            self._spin_node(timeout_sec=0.7)
+            self._spin_node(timeout_sec=0.3)
             if time.time() - start_time > timeout_sec:
                 print("Warning: Timeout waiting for state/error updates")
                 break

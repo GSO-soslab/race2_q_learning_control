@@ -14,7 +14,7 @@ training:
   save_freq_timesteps: 10
 
 agent:
-  learning_rate: 0.00009
+  learning_rate: 0.0001
   buffer_size: 1000000
   batch_size: 128
   gamma: 0.99
@@ -31,7 +31,7 @@ reward_function:
   w1: 1.0   # Error weight
   w2: 0.0   # Servo smoothness
   w3: 0.0  # Thruster usage
-  w4: 0.0  # Thruster smoothness
+  w4: 0.01  # Thruster smoothness
   w5: 0.0  # Servo angle
   w6: 0.0  # Thruster delta
   w7: 0.0  # Thruster action
@@ -39,7 +39,7 @@ reward_function:
   state_error_weights: [
       # 0.0,  # x
       # 0.0,  # y
-      0.5,  # z
+      0.1,  # z
       15.0,  # surge
       8.0,  # sway
       0.0,  # heave

@@ -83,37 +83,37 @@ class CustomSetPointPublisher(Node):
             #     description="Turn to 180 degrees"
             # ),
             SetPoint(
-                position=Vector3(x=0.0, y=0.0, z=3.0),
-                orientation=Vector3(x=3.14, y=0.0, z=3.14),
-                velocity=Vector3(x=-0.25, y=0.0, z=0.0),
+                position=Vector3(x=0.0, y=0.0, z=3.5),
+                orientation=Vector3(x=3.14, y=0.0, z=2.5),
+                velocity=Vector3(x=-0.30, y=0.0, z=0.0),
                 angular_rate=Vector3(x=0.0, y=0.0, z=0.0),
-                duration=100,
+                duration=80,
                 description="Reverse direction"
             ),
             SetPoint(
                 position=Vector3(x=0.0, y=0.0, z=3.0),
-                orientation=Vector3(x=3.14, y=0.0, z=3.14),
-                velocity=Vector3(x=0.25, y=0.0, z=0.0),
+                orientation=Vector3(x=3.14, y=0.0, z=2.5),
+                velocity=Vector3(x=0.20, y=0.0, z=0.0),
                 angular_rate=Vector3(x=0.0, y=0.0, z=0.0),
-                duration=150,
+                duration=80,
                 description="Forward movement at 180 degrees"
             ),
             SetPoint(
-                position=Vector3(x=0.0, y=0.0, z=5.0),
+                position=Vector3(x=0.0, y=0.0, z=1.6),
                 orientation=Vector3(x=3.14, y=0.0, z=-1.57),
-                velocity=Vector3(x=0.25, y=0.0, z=0.0),
+                velocity=Vector3(x=0.2, y=0.0, z=0.0),
                 angular_rate=Vector3(x=0.0, y=0.0, z=0.0),
                 duration=100,
                 description="Ascend and turn 90 degrees left"
             ),
-            SetPoint(
-                position=Vector3(x=0.0, y=0.0, z=5.0),
-                orientation=Vector3(x=3.14, y=0.0, z=0.0),
-                velocity=Vector3(x=0.25, y=0.0, z=0.0),
-                angular_rate=Vector3(x=0.0, y=0.0, z=0.0),
-                duration=100,
-                description="Return to initial orientation"
-            )
+            # SetPoint(
+            #     position=Vector3(x=0.0, y=0.0, z=5.0),
+            #     orientation=Vector3(x=3.14, y=0.0, z=0.0),
+            #     velocity=Vector3(x=0.25, y=0.0, z=0.0),
+            #     angular_rate=Vector3(x=0.0, y=0.0, z=0.0),
+            #     duration=100,
+            #     description="Return to initial orientation"
+            # )
         ]
 
     def _create_control_message(self, setpoint: SetPoint) -> ControlProcess:
