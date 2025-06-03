@@ -6,7 +6,7 @@ environment:
   servo_joints_size: 0
   max_action: 1.0
   min_servo_angle_rad: -0.785 # -45 degrees in radians
-  max_servo_angle_rad: 0.785  # 45 degrees in radians
+  max_servo_angle_rad: 0.785 # 45 degrees in radians
 
 training:
   max_episodes: 1000
@@ -14,59 +14,81 @@ training:
   save_freq_timesteps: 10
 
 agent:
-  learning_rate: 0.0003
+  learning_rate: 0.00008        # REDUCED - slower learning for stability
   buffer_size: 1000000
-  batch_size: 128
+  batch_size: 500
   gamma: 0.99
   tau: 0.005
-  ent_coef: 'auto' # or a fixed value like 0.2
+  ent_coef: auto            # REDUCED - less exploration, more exploitation
   target_update_interval: 1
   # replay_buffer_kwargs: # Optional arguments for the replay buffer
 
 qnetwork:
-  actor_hidden_layers: [128, 128, 128]
+  actor_hidden_layers: [300, 256, 128]
   # critic_hidden_layers: [128, 128, 128]
 
-reward_function:
-  w1: 1.0   # Error weight
-  w2: 0.0   # Servo smoothness
-  w3: 0.0  # Thruster usage
-  w4: 1.0  # Thruster smoothness
-  w5: 0.0  # Servo angle
-  w6: 0.0  # Thruster delta
-  w7: 0.0  # Thruster action
-  w8: 0.0  # Direction change penalty
-  state_error_weights: [
-      # 0.0,  # x
-      # 0.0,  # y
-      0.5,  # z
-      15.0,  # surge
-      8.0,  # sway
-      0.0,  # heave
-      0.0,  # roll
-      1.1,  # pitch
-      0.8  # yaw
-      # 0.0,  # angular_vel_x
-      # 0.0,  # angular_vel_y
-      # 0.0   # angular_vel_z
-    ]
+# Coupling-aware reward configuration - now supports all 4 methods
+coupling:
+  method: 'v4'  # Options: 'v1', 'v2', 'v3', 'v4', 'standard'
+  
+  # Base coupling strength parameters (used by all methods)
+  surge_yaw_weight: 0.25      # REDUCED from 0.3 (less aggressive surge-yaw)
+  pitch_depth_weight: 0.6     # INCREASED from 0.4 (stronger pitch-depth coupling)
+  threshold: 0.05   
 
-  pid_gains:
-    # These are multipliers on top of state_error_weights
-    P_multiplier: 1.0     # Base proportional gain multiplier
-    I_multiplier: 1.0     # Base integral gain multiplier
-    D_multiplier: 0.0     # Base derivative gain multiplier
-    component_multipliers:
-      # z:         [1.0, 0.2, 0.0]  # [P, I, D] for depth
-      # surge:     [1.0, 0.1, 0.0]  # [P, I, D] for surge
-      # # sway:      [1.0, 0.1, 0.0]  # [P, I, D] for sway
-      # # roll:      [1.0, 0.05, 0.0] # [P, I, D] for roll
-      # pitch:     [1.0, 0.05, 0.0] # [P, I, D] for pitch
-      # yaw:       [1.0, 0.2, 0.0]  # [P, I, D] for yaw
-      z:      [1.0, 0.0, 0.0]  
-      surge:  [1.0, 0.0, 0.1]  
-      pitch:  [1.0, 0.0, 0.1]
-      yaw:    [1.0, 0.0, 0.1]
+  # Progressive learning parameters (for v2)
+  progressive:
+    enabled: true
+    exploration_episodes: 50    # Phase 1: Pure exploration
+    coupling_focus_episodes: 100 # Phase 2: Focus on learning coupled pairs
+    # Phase 3 (refinement) starts automatically after coupling_focus_episodes
+  
+  # Dynamic coupling parameters (for v3)
+  dynamic:
+    history_window: 15          # Number of steps to consider for correlation analysis
+    adaptation_rate: 0.1        # How quickly coupling weights adapt (0.0-1.0)
+  
+  # Energy-based parameters (for v4)
+  energy:
+    spring_stiffness: 0.3     # REDUCED from 0.5 (gentler coupling)
+    damping_factor: 0.4       # INCREASED from 0.2 (more damping for stability)
+
+reward_function:
+  w1: 0.8                     # REDUCED from 1.0 (less harsh energy penalty)
+  w2: 0.0
+  w3: 0.0
+  w4: 0.4                     # INCREASED from 0.1 (more thruster smoothness)
+  w5: 0.0
+  w6: 0.0
+  w7: 0.2                     # INCREASED from 0.1 (more action smoothness)
+  w8: 0.1                     # ADDED - direction change penalty
+  
+  # Individual state error weights (used in coupling calculations)
+  state_error_weights: [
+    0.00002,   # z (depth) - INCREASED for better pitch-depth coupling
+    0.005,  # surge - INCREASED to fix asymmetric response
+    0.0001,  # sway
+    0.0,     # heave
+    0.0,     # roll
+    0.001,   # pitch - INCREASED to reduce 0.3 rad error
+    0.00002   # yaw - INCREASED to fix offset issue
+  ]
+
+action_penalties:
+  surge_asymmetry_penalty: 0.1    # Penalty for unequal positive/negative response
+  yaw_bias_penalty: 0.05      
+
+pid_gains:
+  # These are multipliers on top of state_error_weights
+  P_multiplier: 1.0 # Base proportional gain multiplier
+  I_multiplier: 1.0 # Base integral gain multiplier
+  D_multiplier: 0.0 # Base derivative gain multiplier
+  component_multipliers:
+    # Adjusted for coupling-aware control
+    z: [1.0, 0.0, 0.0]      # depth
+    surge: [1.0, 0.0, 0.0]  # surge
+    pitch: [1.0, 0.0, 0.0]  # pitch
+    yaw: [1.0, 0.0, 0.0]    # yaw
 
 plotting:
   plot_interval: 10

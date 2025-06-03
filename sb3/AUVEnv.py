@@ -7,8 +7,12 @@ from rclpy.node import Node
 from std_msgs.msg import Float64, Float32
 from geometry_msgs.msg import TwistStamped
 from mvp_msgs.msg import ControlProcess
+from sensor_msgs.msg import Imu
 import yaml
 from rclpy.clock import Clock
+
+# Import the coupling reward calculator
+from coupling_rewards import CouplingAwareRewardCalculator
 
 class AUVEnvNode(Node):
     """Node to handle ROS2 communications for the AUV environment"""
@@ -32,7 +36,8 @@ class AUVEnvNode(Node):
         self.orientation_err = np.zeros(3)
         self.v_err = np.zeros(3)
         self.omega_ref_err = np.zeros(3)
-        
+        self.linear_acceleration = np.zeros(3)
+
         # Initialize actuator variables
         self.joint_angles_port = 0.0
         self.joint_angles_starboard = 0.0
@@ -94,6 +99,12 @@ class AUVEnvNode(Node):
                                 self.update_thrust_heave_stern, 
                                 1)
         
+        self.create_subscription(
+            Imu,
+            '/race2_auv/imu/data',
+            self.imu_callback,
+            1
+        )
         # For communication between callbacks and the environment
         self.new_state_available = False
         self.new_error_available = False
@@ -164,6 +175,15 @@ class AUVEnvNode(Node):
         if hasattr(self, 'last_action_timestamp') and self.last_state_timestamp > self.last_action_timestamp:
             self.new_state_available = True
     
+    def imu_callback(self, data):
+        """Process IMU data including linear accelerations"""
+        self.get_logger().debug("IMU callback triggered!")
+        
+        # Store linear accelerations (NEW)
+        self.linear_acceleration[0] = data.linear_acceleration.x
+        self.linear_acceleration[1] = data.linear_acceleration.y
+        self.linear_acceleration[2] = data.linear_acceleration.z
+
     def update_joint_port(self, data):
         self.joint_angles_port = data.data
         self.update_joints()
@@ -189,9 +209,21 @@ class AUVEnvNode(Node):
     
     def publish_action(self, action, num_thrusters, num_servos):
         """Publish actions to ROS2 topics"""
-        # Split action into thruster commands and servo angles
-        thruster_cmds = action[:num_thrusters]
-        servo_angles_normalized = action[num_thrusters:] if len(action) > num_thrusters else []
+        
+        # Modify your action space interpretation
+        heave_bow = action[0]
+        heave_stern = action[1]
+        surge_command = action[2]     # Pure surge desire
+        yaw_command = action[3]       # Pure yaw desire (usually 0 for straight)
+        
+        # Convert to physical thrusters
+        surge_port = max(-1.0, min(1.0, 0.8 * surge_command + 0.2 * yaw_command))
+        surge_starboard = max(-1.0, min(1.0, 0.8 * surge_command - 0.2 * yaw_command))
+    
+        thruster_cmds = [heave_bow, heave_stern, surge_port, surge_starboard]
+        
+        # Handle servo commands if present
+        servo_angles_normalized = action[4:] if len(action) > 4 else []
         
         # Convert servo commands to radians if needed
         servo_angles_rad = []
@@ -202,8 +234,8 @@ class AUVEnvNode(Node):
         # All DOFs - modify as needed for your specific configuration
         thruster_mapping = [
             ('heave_bow', thruster_cmds[0]),
-            ('heave_stern',  thruster_cmds[1]),
-            ('surge_port',  thruster_cmds[2]),
+            ('heave_stern', thruster_cmds[1]),
+            ('surge_port', thruster_cmds[2]),
             ('surge_starboard', thruster_cmds[3])
         ]
         
@@ -276,12 +308,12 @@ class AUVEnv(gym.Env):
             dtype=np.float32
         )
         
-        # Update observation space to account for sin/cos representation of angles
-        # Original state had 14 dimensions, with sin/cos for 3 angles we add 3 more dimensions
+        # Update observation space to include angular rates and all velocities
+        # New observation: [errors(10) + velocities(3) + angular_rates(3)] = 16 dimensions
         self.observation_space = spaces.Box(
             low=-np.inf, 
             high=np.inf, 
-            shape=(20,),  
+            shape=(17,),  # Updated size: 10 errors + 3 velocities + 3 angular rates
             dtype=np.float32
         )
         
@@ -291,23 +323,30 @@ class AUVEnv(gym.Env):
         
         # Initialize history arrays for smoothness calculations
         self.joint_positions_history = np.zeros((10, self.num_servos))  # Store last 10 servo positions
-        self.u_prev = np.zeros((10, self.num_thrusters))  # Store last 10 thruster commands
-        self.thruster_command_action_prev = np.zeros((10, self.num_thrusters))  # Store last 10 thruster actions
+        self.u_prev = np.zeros((100, self.num_thrusters))  # Store last 10 thruster commands
+        self.thruster_command_action_prev = np.zeros((100, self.num_thrusters))  # Store last 10 thruster actions
         
         # Initialize tracking variables
         self.thruster_action = np.zeros(self.num_thrusters)
         self.joint_angles = np.zeros(self.num_servos)
         self.last_action = np.zeros(thruster_size + servo_size)
+        
+        # Initialize coupling-aware reward calculator
+        self.coupling_calculator = None
     
     def reset(self, seed=None):
         """Reset the environment to initial state and return the initial observation"""
-        self._spin_node(timeout_sec=0.1)
+        self._spin_node(timeout_sec=0.51)
 
         if seed is not None:
             np.random.seed(seed)
         
         self.episode_step = 0
         self.episode_reward = 0
+        
+        # Initialize coupling calculator if not done yet
+        if self.coupling_calculator is None:
+            self.coupling_calculator = CouplingAwareRewardCalculator(self.config)
         
         zero_thruster_cmds = np.zeros(self.num_thrusters)  
         zero_servo_angles_rad = np.zeros(self.num_servos)  
@@ -348,30 +387,33 @@ class AUVEnv(gym.Env):
         yaw_sin_error = np.sin(yaw_error)
         yaw_cos_error = np.cos(yaw_error)
 
-        # Create initial observation with sin/cos representation
+        # Create initial observation with sin/cos representation + velocities + angular rates
         initial_observation = np.concatenate([
-            depth_error,
-            20 * surge_error,
-            sway_error,
-            heave_error,
-            np.array([roll_sin_error]),
-            np.array([roll_cos_error]),
-            np.array([pitch_sin_error]),
-            np.array([pitch_cos_error]),
-            np.array([yaw_sin_error]),
-            np.array([yaw_cos_error]),
-            depth,
-            20 * surge,
-            sway,
-            heave,
-            np.array([roll_sin]),
-            np.array([roll_cos]),
-            np.array([pitch_sin]),
-            np.array([pitch_cos]),
-            np.array([yaw_sin]),
-            np.array([yaw_cos])
-        ])
+            # Error components (10 elements)
+            depth_error,                    # [0]
+            surge_error,                    # [1] 
+            sway_error,                     # [2]
+            np.array([roll_sin_error]),     # [3]
+            np.array([roll_cos_error]),     # [4]
+            np.array([pitch_sin_error]),    # [5]
+            np.array([pitch_cos_error]),    # [6]
+            np.array([yaw_sin_error]),      # [7]
+            np.array([yaw_cos_error]),      # [8]
+            # heave_error,                    # [9]
+            
+            # Velocity components (3 elements)
+            surge,                          # [10] - surge velocity
+            sway,                           # [11] - sway velocity  
+            heave,                          # [12] - heave velocity
+            
+            # Angular rate components (3 elements)
+            self.node.omega_ref_state[0:1], # [13] - roll rate
+            self.node.omega_ref_state[1:2], # [14] - pitch rate
+            self.node.omega_ref_state[2:3],  # [15] - yaw rate
 
+            self.node.linear_acceleration[0:1], # [15] - x acceleration
+            self.node.linear_acceleration[1:2]  # [16] - y acceleration
+        ])
 
         info = {}
         return initial_observation, info
@@ -416,25 +458,10 @@ class AUVEnv(gym.Env):
         current_yaw_sin = np.sin(current_yaw)
         current_yaw_cos = np.cos(current_yaw)
         
-        current_state = np.concatenate([
-            current_depth_error,
-            current_surge_error,
-            current_sway_error,
-            current_heave_error,
-            np.array([current_roll_sin_error, current_roll_cos_error]),
-            np.array([current_pitch_sin_error, current_pitch_cos_error]),
-            np.array([current_yaw_sin_error, current_yaw_cos_error]),
-            current_depth,
-            current_surge,
-            current_sway,
-            current_heave,
-            np.array([current_roll_sin, current_roll_cos]),
-            np.array([current_pitch_sin, current_pitch_cos]),
-            np.array([current_yaw_sin, current_yaw_cos])
-        ])
-
         # Publish action to ROS
+        # servo_angles_rad = [0,0]
         thruster_cmds, servo_angles_rad = self.node.publish_action(action, self.num_thrusters, self.num_servos)
+        # thruster_cmds = [self.node.thrust_heave_bow,self.node.thrust_heave_stern,self.node.thrust_surge_port,self.node.thrust_surge_starboard]
         # Store for reward calculation
         self.thruster_action = thruster_cmds
         self.joint_angles = servo_angles_rad
@@ -479,7 +506,6 @@ class AUVEnv(gym.Env):
             updated_roll_error = self.node.orientation_err[0]
             updated_pitch_error = self.node.orientation_err[1]
             updated_yaw_error = self.node.orientation_err[2]
-            
             updated_roll_sin_error = np.sin(updated_roll_error)
             updated_roll_cos_error = np.cos(updated_roll_error)
             updated_pitch_sin_error = np.sin(updated_pitch_error)
@@ -488,20 +514,30 @@ class AUVEnv(gym.Env):
             updated_yaw_cos_error = np.cos(updated_yaw_error)
             
             observation = np.concatenate([
-                updated_depth_error,
-                20 * updated_surge_error,
-                updated_sway_error,
-                updated_heave_error,
-                np.array([updated_roll_sin_error, updated_roll_cos_error]),
-                np.array([updated_pitch_sin_error, updated_pitch_cos_error]),
-                np.array([updated_yaw_sin_error, updated_yaw_cos_error]),
-                updated_depth,
-                20 * updated_surge,
-                updated_sway,
-                updated_heave,
-                np.array([updated_roll_sin, updated_roll_cos]),
-                np.array([updated_pitch_sin, updated_pitch_cos]),
-                np.array([updated_yaw_sin, updated_yaw_cos])
+                # Error components (10 elements)
+                updated_depth_error,                           # [0]
+                updated_surge_error,                           # [1]
+                updated_sway_error,                            # [2]
+                np.array([updated_roll_sin_error]),            # [3]
+                np.array([updated_roll_cos_error]),            # [4]
+                np.array([updated_pitch_sin_error]),           # [5]
+                np.array([updated_pitch_cos_error]),           # [6]
+                np.array([updated_yaw_sin_error]),             # [7]
+                np.array([updated_yaw_cos_error]),             # [8]
+                # updated_heave_error,                           # [9]
+                
+                # Velocity components (3 elements)
+                updated_surge,                                 # [10] - surge velocity
+                updated_sway,                                  # [11] - sway velocity
+                updated_heave,                                 # [12] - heave velocity
+                
+                # Angular rate components (3 elements) 
+                self.node.omega_ref_state[0:1],                # [13] - roll rate
+                self.node.omega_ref_state[1:2],                # [14] - pitch rate
+                self.node.omega_ref_state[2:3],                # [15] - yaw rate
+
+                self.node.linear_acceleration[0:1],            # [15] - x acceleration
+                self.node.linear_acceleration[1:2]             # [16] - y acceleration
             ])
             
             # Create error array for reward calculation
@@ -523,10 +559,10 @@ class AUVEnv(gym.Env):
 
         else:
             print("Warning: No new state/error available, returning dummy observation")
-            observation = np.zeros(20)  # Dummy observation with updated dimensions
+            observation = np.zeros(17)  # Updated observation size: 10 errors + 3 velocities + 3 angular rates
             terminated = True
 
-        # Calculate reward
+        # Calculate coupling-aware reward
         reward = self.calculate_reward(state_error_array)
         if isinstance(reward, np.ndarray):
             reward = float(reward.item())
@@ -556,44 +592,38 @@ class AUVEnv(gym.Env):
             rclpy.spin_once(self.node, timeout_sec=0.01)
     
     def calculate_reward(self, state_error_array):
-        """Calculate reward with sin/cos representation for angles"""
+        """Calculate coupling-aware reward with physics-based coupling"""
+        
+        # Get coupling method from config
+        coupling_method = self.config.get('coupling', {}).get('method', 'v1')
+        
+        # Calculate coupling-aware performance error
+        if coupling_method == 'v1':
+            performance_error = self.coupling_calculator.calculate_coupling_aware_reward_v1(
+                state_error_array, self.episode_step)
+        elif coupling_method == 'v2':
+            performance_error = self.coupling_calculator.calculate_coupling_aware_reward_v2(
+                state_error_array, self.episode_step)
+        elif coupling_method == 'v3':
+            performance_error = self.coupling_calculator.calculate_coupling_aware_reward_v3(
+                state_error_array, self.episode_step)
+        elif coupling_method == 'v4':
+            performance_error = self.coupling_calculator.calculate_coupling_aware_reward_v4_enhanced(
+                state_error_array, self.episode_step)
+        elif coupling_method == 'standard':
+            # Fallback to original reward calculation
+            performance_error = self._calculate_standard_performance_error(state_error_array)
+        else:
+            # Default to v1 if method not recognized
+            print(f"Warning: Unknown coupling method '{coupling_method}', defaulting to v1")
+            performance_error = self.coupling_calculator.calculate_coupling_aware_reward_v1(
+                state_error_array, self.episode_step)
+        
+        # Apply performance weight
         w = self.config['reward_function']
-        w1, w2, w3, w4, w5, w6, w7, w8 = w['w1'], w['w2'], w['w3'], w['w4'], w['w5'], w['w6'], w['w7'], w['w8']
+        coupling_performance_reward = w['w1'] * performance_error
         
-        # Update state_error_weights to account for sin/cos components
-        # Original weights were for 7 components, now we have 10 (3 angles -> 6 sin/cos components)
-        original_weights = np.array(w['state_error_weights'])
-        
-        # Create new weights array accounting for sin/cos representation
-        # For each angle, distribute its weight across both sin and cos components
-        state_error_weights = np.zeros(10)
-        
-        # Position and velocity errors (unchanged)
-        state_error_weights[0] = original_weights[0]  # depth
-        state_error_weights[1] = original_weights[1]  # surge
-        state_error_weights[2] = original_weights[2]  # sway
-        state_error_weights[3] = original_weights[3]  # heave
-        
-        # Orientation errors (distribute weights between sin/cos pairs)
-        state_error_weights[4] = original_weights[4] / 2  # roll sin
-        state_error_weights[5] = original_weights[4] / 2  # roll cos
-        state_error_weights[6] = original_weights[5] / 2  # pitch sin
-        state_error_weights[7] = original_weights[5] / 2  # pitch cos
-        state_error_weights[8] = original_weights[6] / 2  # yaw sin
-        state_error_weights[9] = original_weights[6] / 2  # yaw cos
-
-        # Extract error
-        error = state_error_array
-        if error is None:
-            error = np.zeros(len(state_error_weights))
-            
-        # Performance error calculation
-        error_column = error.reshape(-1, 1)  # Shape: (N,1)
-        error_row = error.reshape(1, -1)     # Shape: (1,N)
-        weights_diag = np.diag(state_error_weights)  # Shape: (N,N)
-        
-        performance_error = error_row @ weights_diag @ error_column
-        performance_error = -performance_error
+        # Keep existing penalty calculations
         
         # Servo smoothness penalty using sine and cosine components
         servo_smoothness_penalty = 0
@@ -616,7 +646,8 @@ class AUVEnv(gym.Env):
         servo_smoothness_penalty = np.linalg.norm(delta_theta)
         
         # Update joint_positions_history
-        self.joint_positions_history = np.vstack((self.joint_positions_history[1:], self.joint_angles))
+        if self.num_servos > 0:
+            self.joint_positions_history = np.vstack((self.joint_positions_history[1:], self.joint_angles))
 
         # Thruster usage penalty
         u_t = np.array([
@@ -637,7 +668,7 @@ class AUVEnv(gym.Env):
         thruster_delta_reward = np.linalg.norm(u_t - self.u_prev[-2]) if len(self.u_prev) >= 2 else 0
 
         # Servo angle penalty
-        servo_angle_penalty = np.linalg.norm(self.joint_angles)
+        servo_angle_penalty = np.linalg.norm(self.joint_angles) if len(self.joint_angles) > 0 else 0
 
         # Update thruster_command_action_prev with clear logic
         self.thruster_command_action_prev = np.vstack((
@@ -649,21 +680,97 @@ class AUVEnv(gym.Env):
         thruster_action_penalty = np.sum(np.abs(self.thruster_action - np.average(self.thruster_command_action_prev, axis=0)))
 
         # Thruster Direction Change Penalty
-        direction_change_penalty = w8 * thruster_action_penalty ** 2  # Quadratic penalty
+        direction_change_penalty = w['w8'] * thruster_action_penalty ** 2  # Quadratic penalty
 
-        # Final reward calculation
-        reward = -(
-            -w1 * performance_error +
-            w2 * servo_smoothness_penalty +
-            w3 * thruster_usage_penalty +
-            w4 * thruster_smoothness_penalty +
-            w5 * servo_angle_penalty +
-            w6 * thruster_delta_reward +
-            w7 * thruster_action_penalty +
-            w8 * direction_change_penalty
+        # Final reward calculation with coupling-aware performance term
+        reward = (
+            coupling_performance_reward -  # This now includes coupling awareness
+            w['w2'] * servo_smoothness_penalty -
+            w['w3'] * thruster_usage_penalty -
+            w['w4'] * thruster_smoothness_penalty -
+            w['w5'] * servo_angle_penalty -
+            w['w6'] * thruster_delta_reward -
+            w['w7'] * thruster_action_penalty -
+            w['w8'] * direction_change_penalty
         )
         
+        # Optional: Add coupling-specific logging for debugging
+        if hasattr(self.coupling_calculator, 'error_history') and len(self.coupling_calculator.error_history) > 0:
+            current_errors = self.coupling_calculator.error_history[-1]
+            
+            # Log coupling metrics every 50 steps for debugging
+            if self.episode_step % 50 == 0:
+                diagnostics = self.coupling_calculator.get_diagnostics()
+                if diagnostics:
+                    print(f"Step {self.episode_step}: Coupling Metrics")
+                    print(f"  Learning Phase: {diagnostics.get('learning_phase', 'unknown')}")
+                    print(f"  Surge-Yaw: surge={current_errors['surge']:.4f}, yaw={current_errors['yaw']:.4f}")
+                    print(f"  Pitch-Depth: pitch={current_errors['pitch']:.4f}, depth={current_errors['depth']:.4f}")
+                    print(f"  Surge-Yaw Magnitude: {diagnostics['surge_yaw_magnitude']:.4f}")
+                    print(f"  Pitch-Depth Magnitude: {diagnostics['pitch_depth_magnitude']:.4f}")
+                    print(f"  Coupling Performance: {coupling_performance_reward:.4f}")
+                    print(f"  Total Reward: {reward:.4f}")
+        
         return reward
+    
+    def _calculate_standard_performance_error(self, state_error_array):
+        """Standard performance error calculation for fallback"""
+        original_weights = np.array(self.config['reward_function']['state_error_weights'])
+        state_error_weights = self._expand_weights_for_sincos(original_weights, state_error_array)
+        
+        error_column = state_error_array.reshape(-1, 1)
+        error_row = state_error_array.reshape(1, -1)
+        weights_diag = np.diag(state_error_weights)
+        
+        performance_error = error_row @ weights_diag @ error_column
+        return float((-performance_error).item())
+    
+    def _expand_weights_for_sincos(self, original_weights, state_error_array):
+        """Expand weights array to account for sin/cos representation"""
+        # Dynamically size based on actual state_error_array
+        target_size = len(state_error_array)
+        state_error_weights = np.zeros(target_size)
+        
+        # Fill as much as we can from original_weights
+        original_weights = np.array(original_weights)
+        
+        if len(original_weights) == 7 and target_size == 10:
+            # Standard case: 7 original -> 10 expanded (sin/cos for 3 angles)
+            # Position and velocity errors (unchanged)
+            state_error_weights[0] = original_weights[0]  # depth
+            state_error_weights[1] = original_weights[1]  # surge
+            state_error_weights[2] = original_weights[2]  # sway
+            state_error_weights[3] = original_weights[3]  # heave
+            
+            # Orientation errors (distribute weights between sin/cos pairs)
+            state_error_weights[4] = original_weights[4] / 2  # roll sin
+            state_error_weights[5] = original_weights[4] / 2  # roll cos
+            state_error_weights[6] = original_weights[5] / 2  # pitch sin
+            state_error_weights[7] = original_weights[5] / 2  # pitch cos
+            state_error_weights[8] = original_weights[6] / 2  # yaw sin
+            state_error_weights[9] = original_weights[6] / 2  # yaw cos
+            
+        elif len(original_weights) == target_size:
+            # Already the right size, use as-is
+            state_error_weights = original_weights.copy()
+            
+        else:
+            # General case: fill what we can, pad/truncate as needed
+            min_size = min(len(original_weights), target_size)
+            state_error_weights[:min_size] = original_weights[:min_size]
+            
+            # If we need more weights than we have, use the last weight value
+            if target_size > len(original_weights):
+                last_weight = original_weights[-1] if len(original_weights) > 0 else 0.001
+                state_error_weights[len(original_weights):] = last_weight
+        
+        return state_error_weights
+    
+    def get_coupling_diagnostics(self):
+        """Get detailed coupling diagnostics for analysis"""
+        if self.coupling_calculator is None:
+            return None
+        return self.coupling_calculator.get_diagnostics()
 
     def close(self):
         """Clean up resources"""

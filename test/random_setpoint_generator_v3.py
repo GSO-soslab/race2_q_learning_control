@@ -12,15 +12,17 @@ class SimpleSetPointPublisher(Node):
         super().__init__('simple_set_point_publisher')
         # Parameters
         self.declare_parameter('rate_hz', 5.0)
-        self.declare_parameter('random_duration', 50.0)
+        self.declare_parameter('random_duration', 100.0)
         self.declare_parameter('pos_z_range', [1.0, 8.0])
-        self.declare_parameter('ori_z_range', [-3.14, 3.14])
-        self.declare_parameter('vel_x_range', [-0.4, 0.35])
+        self.declare_parameter('ori_z_range', [-2.14, 2.14])
+        self.declare_parameter('ori_y_range', [-0.1, 0.1])
+        self.declare_parameter('vel_x_range', [-0.5, 0.5])
         
         self.rate_hz = self.get_parameter('rate_hz').value
         self.random_duration = self.get_parameter('random_duration').value
         self.pos_z_min, self.pos_z_max = self.get_parameter('pos_z_range').value
         self.ori_z_min, self.ori_z_max = self.get_parameter('ori_z_range').value
+        self.ori_y_min, self.ori_y_max = self.get_parameter('ori_y_range').value
         self.vel_x_min, self.vel_x_max = self.get_parameter('vel_x_range').value
         
         self.publisher = self.create_publisher(
@@ -52,7 +54,7 @@ class SimpleSetPointPublisher(Node):
         msg.control_mode = self.control_mode
         
         msg.position = Vector3(x=0.0, y=0.0, z=random.uniform(self.pos_z_min, self.pos_z_max))
-        msg.orientation = Vector3(x=3.14, y=0.0, z=random.uniform(self.ori_z_min, self.ori_z_max))
+        msg.orientation = Vector3(x=3.14, y=random.uniform(self.ori_y_min, self.ori_y_max), z=random.uniform(self.ori_z_min, self.ori_z_max))
         msg.velocity = Vector3(x=random.uniform(self.vel_x_min, self.vel_x_max), y=0.0, z=0.0)
         msg.angular_rate = Vector3(x=0.0, y=0.0, z=0.0)
         
