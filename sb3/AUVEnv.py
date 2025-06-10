@@ -4,15 +4,83 @@ import numpy as np
 import os, time, datetime
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float64, Float32
-from geometry_msgs.msg import TwistStamped
+from std_msgs.msg import Float64, Float32, Header
+from geometry_msgs.msg import Vector3
 from mvp_msgs.msg import ControlProcess
 from sensor_msgs.msg import Imu
 import yaml
 from rclpy.clock import Clock
+import random
 
 # Import the coupling reward calculator
 from coupling_rewards import CouplingAwareRewardCalculator
+
+class SetpointManager:
+    """Manages setpoint generation for episode-based training"""
+    
+    def __init__(self, config):
+        # Load setpoint configuration from config or use defaults
+        setpoint_config = config.get('setpoint', {})
+        
+        self.pos_z_range = setpoint_config.get('pos_z_range', [1.0, 8.0])
+        self.ori_z_range = setpoint_config.get('ori_z_range', [-2.14, 2.14])
+        self.ori_y_range = setpoint_config.get('ori_y_range', [-0.1, 0.1])
+        self.vel_x_range = setpoint_config.get('vel_x_range', [-0.6, 0.6])
+        
+        # Fixed values
+        self.frame_id = "race2_auv/world_ned"
+        self.child_frame_id = "race2_auv/cg_link"
+        self.control_mode = "4dof"
+        
+        self.current_setpoint = None
+        print(f"SetpointManager initialized with ranges:")
+        print(f"  pos_z: {self.pos_z_range}")
+        print(f"  ori_z: {self.ori_z_range}")
+        print(f"  ori_y: {self.ori_y_range}")
+        print(f"  vel_x: {self.vel_x_range}")
+    
+    def generate_new_setpoint(self):
+        """Generate a new random setpoint for a new episode"""
+        msg = ControlProcess()
+        msg.header = Header()
+        msg.header.frame_id = self.frame_id
+        msg.child_frame_id = self.child_frame_id
+        msg.control_mode = self.control_mode
+        
+        # Generate random values within specified ranges
+        msg.position = Vector3(
+            x=0.0, 
+            y=0.0, 
+            z=random.uniform(self.pos_z_range[0], self.pos_z_range[1])
+        )
+        msg.orientation = Vector3(
+            x=3.14, 
+            y=random.uniform(self.ori_y_range[0], self.ori_y_range[1]), 
+            z=random.uniform(self.ori_z_range[0], self.ori_z_range[1])
+        )
+        msg.velocity = Vector3(
+            x=random.uniform(self.vel_x_range[0], self.vel_x_range[1]), 
+            y=0.0, 
+            z=0.0
+        )
+        msg.angular_rate = Vector3(x=0.0, y=0.0, z=0.0)
+        
+        self.current_setpoint = msg
+        return msg
+    
+    def get_current_setpoint(self):
+        """Get the current setpoint"""
+        return self.current_setpoint
+    
+    def get_setpoint_info(self):
+        """Get human-readable info about current setpoint"""
+        if self.current_setpoint is None:
+            return "No setpoint generated yet"
+        
+        return (f"Setpoint - pos_z: {self.current_setpoint.position.z:.2f}, "
+                f"ori_z: {self.current_setpoint.orientation.z:.2f}, "
+                f"ori_y: {self.current_setpoint.orientation.y:.2f}, "
+                f"vel_x: {self.current_setpoint.velocity.x:.2f}")
 
 class AUVEnvNode(Node):
     """Node to handle ROS2 communications for the AUV environment"""
@@ -24,6 +92,9 @@ class AUVEnvNode(Node):
         
         self.thruster_size = self.config['environment']['thruster_size']
         servo_size = self.config['environment']['servo_joints_size']
+        
+        # Initialize setpoint manager
+        self.setpoint_manager = SetpointManager(config)
         
         # Initialize state variables
         self.position_state = np.zeros(3)
@@ -57,6 +128,20 @@ class AUVEnvNode(Node):
             'port_servo': self.create_publisher(Float64, '/race2_auv/control/surge_port_servo', 1),
             'starboard_servo': self.create_publisher(Float64, '/race2_auv/control/surge_starboard_servo', 1)
         }
+        
+        # Create setpoint publisher
+        self.setpoint_publisher = self.create_publisher(
+            ControlProcess,
+            '/race2_auv/controller/process/set_point',
+            10
+        )
+        
+        # Create timer for continuous setpoint publishing
+        self.setpoint_publish_rate = 5.0  # 5 Hz
+        self.setpoint_timer = self.create_timer(
+            1.0 / self.setpoint_publish_rate, 
+            self.publish_current_setpoint_callback
+        )
         
         # Create subscribers
         self.create_subscription(ControlProcess,  
@@ -105,6 +190,7 @@ class AUVEnvNode(Node):
             self.imu_callback,
             1
         )
+        
         # For communication between callbacks and the environment
         self.new_state_available = False
         self.new_error_available = False
@@ -115,6 +201,33 @@ class AUVEnvNode(Node):
         # Declare parameters
         self.declare_parameter('max_steps', 500)
         self.max_steps = self.get_parameter('max_steps').value
+    
+    def publish_current_setpoint_callback(self):
+        """Continuously publish the current setpoint (like your original publisher)"""
+        if self.setpoint_manager.current_setpoint is not None:
+            # Update timestamp and publish
+            self.setpoint_manager.current_setpoint.header.stamp = self.get_clock().now().to_msg()
+            self.setpoint_publisher.publish(self.setpoint_manager.current_setpoint)
+            self.get_logger().debug("Published current setpoint")
+    
+    def publish_new_setpoint(self):
+        """Generate and publish a new setpoint for the episode"""
+        setpoint = self.setpoint_manager.generate_new_setpoint()
+        setpoint.header.stamp = self.get_clock().now().to_msg()
+        
+        # Publish the setpoint immediately
+        self.setpoint_publisher.publish(setpoint)
+        
+        # Add some debugging
+        self.get_logger().info(f"Published new setpoint: {self.setpoint_manager.get_setpoint_info()}")
+        self.get_logger().info(f"Setpoint publisher topic: {self.setpoint_publisher.topic_name}")
+        self.get_logger().info(f"Setpoint publisher subscriber count: {self.setpoint_publisher.get_subscription_count()}")
+        
+        return setpoint
+    
+    def get_current_setpoint_info(self):
+        """Get information about the current setpoint"""
+        return self.setpoint_manager.get_setpoint_info()
     
     def error_callback(self, data):
         """Process error updates"""
@@ -213,12 +326,13 @@ class AUVEnvNode(Node):
         # Modify your action space interpretation
         heave_bow = action[0]
         heave_stern = action[1]
-        surge_command = action[2]     # Pure surge desire
-        yaw_command = action[3]       # Pure yaw desire (usually 0 for straight)
-        
-        # Convert to physical thrusters
-        surge_port = max(-1.0, min(1.0, 0.8 * surge_command + 0.2 * yaw_command))
-        surge_starboard = max(-1.0, min(1.0, 0.8 * surge_command - 0.2 * yaw_command))
+        # surge_command = action[2]     # Pure surge desire
+        # yaw_command = action[3]       # Pure yaw desire (usually 0 for straight)
+        surge_port = action[2]
+        surge_starboard = action[3]
+        # # Convert to physical thrusters
+        # surge_port = max(-1.0, min(1.0, 0.8 * surge_command + 0.2 * yaw_command))
+        # surge_starboard = max(-1.0, min(1.0, 0.8 * surge_command - 0.2 * yaw_command))
     
         thruster_cmds = [heave_bow, heave_stern, surge_port, surge_starboard]
         
@@ -320,6 +434,7 @@ class AUVEnv(gym.Env):
         # Initialize episode-related variables
         self.episode_step = 0
         self.episode_reward = 0.0
+        self.episode_count = 0  # Track total episodes
         
         # Initialize history arrays for smoothness calculations
         self.joint_positions_history = np.zeros((10, self.num_servos))  # Store last 10 servo positions
@@ -333,17 +448,35 @@ class AUVEnv(gym.Env):
         
         # Initialize coupling-aware reward calculator
         self.coupling_calculator = None
+        
+        # Store episode setpoint info for logging
+        self.current_episode_setpoint_info = "No setpoint set yet"
     
     def reset(self, seed=None):
         """Reset the environment to initial state and return the initial observation"""
-        self._spin_node(timeout_sec=0.51)
-
         if seed is not None:
             np.random.seed(seed)
+            random.seed(seed)  # Also seed the random module for setpoint generation
         
         self.episode_step = 0
         self.episode_reward = 0
+        self.episode_count += 1
         
+        # Generate and publish a new setpoint for this episode
+        setpoint = self.node.publish_new_setpoint()
+        self.current_episode_setpoint_info = self.node.get_current_setpoint_info()
+        
+        print(f"Episode {self.episode_count} started - {self.current_episode_setpoint_info}")
+        
+        # Wait longer for the setpoint to propagate through the system
+        time.sleep(0.2)
+        self._spin_node(timeout_sec=0.3)
+        
+        # Publish the setpoint again to make sure it's received
+        setpoint = self.node.publish_new_setpoint()
+        time.sleep(0.1)
+        self._spin_node(timeout_sec=0.3)
+
         # Initialize coupling calculator if not done yet
         if self.coupling_calculator is None:
             self.coupling_calculator = CouplingAwareRewardCalculator(self.config)
@@ -415,7 +548,16 @@ class AUVEnv(gym.Env):
             self.node.linear_acceleration[1:2]  # [16] - y acceleration
         ])
 
-        info = {}
+        info = {
+            'episode_count': self.episode_count,
+            'setpoint_info': self.current_episode_setpoint_info,
+            'setpoint_values': {
+                'pos_z': setpoint.position.z,
+                'ori_z': setpoint.orientation.z,
+                'ori_y': setpoint.orientation.y,
+                'vel_x': setpoint.velocity.x
+            }
+        }
         return initial_observation, info
     
     def step(self, action):
@@ -459,9 +601,7 @@ class AUVEnv(gym.Env):
         current_yaw_cos = np.cos(current_yaw)
         
         # Publish action to ROS
-        # servo_angles_rad = [0,0]
         thruster_cmds, servo_angles_rad = self.node.publish_action(action, self.num_thrusters, self.num_servos)
-        # thruster_cmds = [self.node.thrust_heave_bow,self.node.thrust_heave_stern,self.node.thrust_surge_port,self.node.thrust_surge_starboard]
         # Store for reward calculation
         self.thruster_action = thruster_cmds
         self.joint_angles = servo_angles_rad
@@ -536,8 +676,8 @@ class AUVEnv(gym.Env):
                 self.node.omega_ref_state[1:2],                # [14] - pitch rate
                 self.node.omega_ref_state[2:3],                # [15] - yaw rate
 
-                self.node.linear_acceleration[0:1],            # [15] - x acceleration
-                self.node.linear_acceleration[1:2]             # [16] - y acceleration
+                self.node.linear_acceleration[0:1],            # [16] - x acceleration
+                self.node.linear_acceleration[1:2]             # [17] - y acceleration
             ])
             
             # Create error array for reward calculation
@@ -559,8 +699,9 @@ class AUVEnv(gym.Env):
 
         else:
             print("Warning: No new state/error available, returning dummy observation")
-            observation = np.zeros(17)  # Updated observation size: 10 errors + 3 velocities + 3 angular rates
+            observation = np.zeros(17)  # Updated observation size: 10 errors + 3 velocities + 3 angular rates + 2 accelerations
             terminated = True
+            state_error_array = np.zeros(10)  # Default error array
 
         # Calculate coupling-aware reward
         reward = self.calculate_reward(state_error_array)
@@ -583,7 +724,14 @@ class AUVEnv(gym.Env):
         # Increment step counter
         self.episode_step += 1
 
-        return observation, reward, terminated, truncated, {}
+        # Add episode info to the info dict
+        info = {
+            'episode_step': self.episode_step,
+            'episode_reward': self.episode_reward,
+            'setpoint_info': self.current_episode_setpoint_info
+        }
+
+        return observation, reward, terminated, truncated, info
     
     def _spin_node(self, timeout_sec=0.1):
         """Process ROS callbacks for a limited time"""

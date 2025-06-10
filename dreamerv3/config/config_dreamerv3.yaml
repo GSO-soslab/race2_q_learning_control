@@ -1,0 +1,272 @@
+# Random seed for reproducibility
+others:
+  random_seed: 42
+
+# Environment configuration
+environment:
+  thruster_size: 4
+  servo_joints_size: 0  # Set to 2 if using servos
+  max_action: 1.0
+  min_servo_angle_rad: -0.785  # -45 degrees
+  max_servo_angle_rad: 0.785   # 45 degrees
+  
+  # Environment type settings
+  observation_type: "vector"  # "vector" or "mixed" (vector + image)
+  include_visual_obs: false   # Set true if using sonar/camera data
+  visual_obs_shape: [64, 64, 1]  # Shape for visual observations
+
+# Training configuration
+training:
+  max_episodes: 1000        # For episode-based tracking
+  max_t: 200               # Max steps per episode
+  total_steps: 100000     # Total training steps (overrides max_episodes)
+  
+  # DreamerV3 specific training settings
+  prefill_steps: 5000      # Steps to collect before training starts
+  train_every: 16          # Train every N steps
+  train_steps: 1           # Number of train steps per train_every
+  
+  # Evaluation settings
+  eval_every: 10000        # Evaluate every N steps
+  eval_episodes: 5         # Number of episodes for evaluation
+
+# DreamerV3 algorithm configuration
+dreamerv3:
+  # Core algorithm parameters
+  batch_size: 16           # Batch size for training
+  batch_length: 50         # Sequence length for world model training
+  replay_size: 100000     # 2000000 for online training
+  
+  # World model architecture
+  dyn_stoch: 32           # Stochastic state size
+  dyn_deter: 512          # Deterministic state size  
+  dyn_hidden: 512         # Hidden layer size
+  dyn_rec_depth: 1        # Recurrent depth
+  
+  # Encoder/Decoder settings
+  encoder_depth: 2        # CNN encoder depth (for visual obs)
+  decoder_depth: 2        # CNN decoder depth
+  cnn_act: "SiLU"        # CNN activation function
+  cnn_norm: "LayerNorm"   # CNN normalization
+  
+  # Learning rates
+  model_lr: 0.0002       # World model learning rate
+  actor_lr: 0.0001       # Actor learning rate  
+  critic_lr: 0.0003       # Critic learning rate
+  
+  # Loss weights
+  kl_weight: 1.0          # KL divergence weight
+  rec_weight: 1.0         # Reconstruction weight
+  reward_weight: 1.0      # Reward prediction weight
+  continue_weight: 1.0    # Continue prediction weight
+  
+  # Actor-critic settings
+  actor_dist: "normal"    # Action distribution type
+  actor_grad: "dynamics"  # Actor gradient computation
+  actor_reg: "l2"         # Actor regularization
+  critic_reg: "l2"        # Critic regularization
+  
+  # Exploration settings
+  exploration_noise: 0.3  # Action noise for exploration
+  exploration_decay: 0.0  # Exploration decay rate
+  exploration_min: 0.1    # Minimum exploration noise
+  
+  # Horizon settings
+  imag_horizon: 15        # Imagination horizon for planning
+  
+  # Optimization settings
+  grad_clip: 100.0        # Gradient clipping value
+  weight_decay: 0.0       # Weight decay
+  
+  # AUV-specific enhancements
+  reward_scale: 1.0       # Scale for reward signals
+  reward_clip: 10.0       # Clip rewards to this range
+  symlog_rewards: true    # Use symlog transformation for rewards
+  reward_smoothing: 0.05  # Exponential smoothing factor for rewards
+  
+  # World model consistency features
+  imagination_bonus: 0.1              # Bonus for safe exploration
+  world_model_consistency: 0.05       # Weight for consistency bonus
+  
+  # Coupling-specific parameters for DreamerV3
+  coupling_aware_training: true       # Enable coupling-aware features
+  temporal_consistency_weight: 0.1    # Weight for temporal consistency
+  predictive_accuracy_bonus: 0.05     # Bonus for prediction accuracy
+
+# Setpoint management configuration
+setpoint:
+  rate_hz: 5.0                        # Setpoint publishing rate
+  random_duration: 200.0              # Duration to keep same setpoint (seconds)
+  pos_z_range: [1.0, 8.0]            # Depth range (meters)
+  ori_z_range: [-2.14, 2.14]         # Yaw range (radians) 
+  ori_y_range: [-0.1, 0.1]           # Pitch range (radians)
+  vel_x_range: [-0.6, 0.6]           # Surge velocity range (m/s)
+  
+  # Dynamic setpoint features
+  enable_dynamic_setpoints: true      # Allow runtime setpoint changes
+  setpoint_smoothing: true            # Smooth setpoint transitions
+  setpoint_update_episodes: 50        # Episodes between setpoint updates
+
+# Offline training configuration (for ROSbag data)
+offline_training:
+  enabled: true                      # Set true for offline mode
+  rosbag_paths: [                     # Paths to preprocessed data files
+    "/home/farhang/Downloads/rosbag2_2025_05_27-14_30_24/rosbag2_2025_05_27-14_30_24_0.mcap",
+    # "data/processed/mission_002.h5",
+    # "data/processed/test_run_*.pkl"
+  ]
+  batch_size: 32                      # Batch size for offline training
+  sequence_length: 50                 # Sequence length for offline data
+  
+  # Data preprocessing settings
+  normalize_observations: true        # Normalize observation data
+  normalize_actions: true             # Normalize action data
+  filter_incomplete_episodes: true    # Remove incomplete episodes
+  min_episode_length: 20              # Minimum episode length to keep
+  
+  # Data augmentation
+  temporal_augmentation: false        # Apply temporal data augmentation
+  noise_augmentation: false           # Add noise for robustness
+
+# Enhanced coupling-aware reward configuration
+coupling:
+  method: 'v4'                        # Options: 'v1', 'v2', 'v3', 'v4', 'standard'
+  
+  # Base coupling strength parameters
+  surge_yaw_weight: 0.25              # Reduced for DreamerV3 stability
+  pitch_depth_weight: 0.6             # Increased for pitch-depth coupling
+  threshold: 0.05                     # Coupling activation threshold
+  
+  # Progressive learning parameters (for v2)
+  progressive:
+    enabled: true
+    exploration_episodes: 100         # Increased for DreamerV3
+    coupling_focus_episodes: 200      # Extended coupling focus phase
+  
+  # Dynamic coupling parameters (for v3)  
+  dynamic:
+    history_window: 15                # Steps for correlation analysis
+    adaptation_rate: 0.1              # Coupling weight adaptation rate
+  
+  # Energy-based parameters (for v4)
+  energy:
+    spring_stiffness: 0.3             # Reduced for gentler coupling
+    damping_factor: 0.4               # Increased damping for stability
+  
+  # Surge-specific fixes for DreamerV3
+  surge_fixes:
+    priority_mode: true               # Prioritize surge performance
+    error_threshold: 0.15             # Threshold for surge issues
+    coupling_reduction: 0.3           # Reduce coupling when surge struggles
+    progress_bonus_scale: 0.2         # Scale for surge improvement bonus
+    setpoint_tracking_bonus: 0.15     # Bonus for setpoint tracking
+
+# Reward function weights (enhanced for DreamerV3)
+reward_function:
+  w1: 0.8    # Performance error weight (reduced for stability)
+  w2: 0.0    # Servo smoothness (disabled)
+  w3: 0.0    # Thruster usage (disabled) 
+  w4: 0.3    # Thruster smoothness (increased)
+  w5: 0.0    # Servo angle penalty (disabled)
+  w6: 0.0    # Thruster delta (disabled)
+  w7: 0.2    # Action smoothness (increased)
+  w8: 0.1    # Direction change penalty
+  
+  # State error weights for coupling calculations
+  state_error_weights: [
+    0.00003,  # z (depth) - Increased for better pitch-depth coupling
+    0.006,    # surge - Increased to fix asymmetric response  
+    0.0001,   # sway
+    0.0,      # heave
+    0.0,      # roll  
+    0.002,    # pitch - Increased to reduce 0.3 rad error
+    0.00003   # yaw - Increased to fix offset issue
+  ]
+  
+  # DreamerV3 specific reward enhancements
+  action_penalties:
+    surge_asymmetry_penalty: 0.15     # Increased penalty for asymmetric response
+    yaw_bias_penalty: 0.08            # Increased penalty for yaw bias
+    temporal_consistency_bonus: 0.1   # Bonus for consistent behavior
+    exploration_safety_bonus: 0.05    # Bonus for safe exploration
+
+# Monitoring and logging configuration
+monitoring:
+  log_interval: 100                   # Log every N steps
+  plot_interval: 1000                 # Create plots every N steps  
+  checkpoint_interval: 10000          # Save checkpoint every N steps
+  
+  # Metrics to track
+  track_coupling_metrics: true        # Track coupling-specific metrics
+  track_world_model_metrics: true     # Track world model performance
+  track_exploration_metrics: true     # Track exploration statistics
+  
+  # Visualization settings
+  create_reward_plots: true           # Create reward progression plots
+  create_coupling_plots: true         # Create coupling analysis plots
+  create_world_model_plots: true      # Create world model diagnostic plots
+  
+  # TensorBoard logging (if available)
+  tensorboard_logging: false          # Enable TensorBoard logging
+  tensorboard_log_dir: "tensorboard_logs"
+
+# Evaluation configuration
+evaluation:
+  num_episodes: 10                    # Episodes for evaluation
+  deterministic: true                 # Use deterministic policy
+  verbose: true                       # Verbose evaluation output
+  
+  # Evaluation metrics
+  compute_coupling_metrics: true      # Compute coupling performance
+  compute_stability_metrics: true     # Compute stability metrics
+  save_trajectories: true             # Save evaluation trajectories
+  
+  # Evaluation visualization
+  create_evaluation_plots: true       # Create evaluation result plots
+  save_episode_videos: false          # Save video recordings (if supported)
+
+# Deployment configuration
+deployment:
+  # Real-world deployment settings
+  safety_mode: true                   # Enable safety constraints
+  max_action_change: 0.2              # Limit action changes between steps
+  emergency_stop_threshold: 5.0       # Emergency stop on high errors
+  
+  # Model export settings
+  export_onnx: false                  # Export model to ONNX format
+  export_jit: true                    # Export JAX JIT compiled model
+  
+  # ROS2 integration settings
+  ros_control_rate: 10.0              # Control loop frequency (Hz)
+  ros_timeout: 1.0                    # ROS communication timeout (seconds)
+  
+# Hardware-specific settings
+hardware:
+  # Computational settings
+  use_gpu: true                       # Use GPU acceleration if available
+  mixed_precision: true               # Use mixed precision training
+  
+  # Memory settings
+  replay_buffer_device: "cpu"         # Device for replay buffer storage
+  model_device: "gpu"                 # Device for model computations
+  
+  # Performance optimizations
+  jit_compile: true                   # Use JIT compilation
+  parallel_episodes: 1                # Number of parallel episodes (set >1 if multiple environments)
+
+# Data collection settings (for creating offline datasets)
+data_collection:
+  enabled: false                      # Enable data collection mode
+  output_dir: "collected_data"        # Directory for collected data
+  
+  # Collection parameters
+  collection_episodes: 100            # Episodes to collect
+  collection_policy: "random"         # Policy for data collection ("random", "pretrained")
+  
+  # Data format settings
+  save_format: "h5"                   # Format for saved data ("h5", "pkl")
+  compress_data: true                 # Compress saved data
+  
+  # Quality control
+  filter_poor_episodes: true          # Remove episodes with poor performance
+  min_episode_reward: -50.0           # Minimum reward to keep episode

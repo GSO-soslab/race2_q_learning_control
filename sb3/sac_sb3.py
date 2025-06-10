@@ -18,9 +18,8 @@ import torch.nn as nn
 
 # For environment compatibility
 import gym
-# from gym.wrappers import TimeLimit # Removed, as AUVEnv might handle max steps
 
-# Import custom environment
+# Import custom environment (now with integrated setpoint publisher)
 from AUVEnv import AUVEnv
 
 class GradientMonitoringCallback(BaseCallback):
@@ -235,12 +234,12 @@ class GradientMonitoringCallback(BaseCallback):
         plt.savefig(plot_path, dpi=150, bbox_inches='tight')
         plt.close()
 
-class RewardPlottingCallback(BaseCallback):
+class EnhancedRewardPlottingCallback(BaseCallback):
     """
-    Custom callback for plotting rewards during training
+    Enhanced callback for plotting rewards with setpoint tracking during training
     """
     def __init__(self, plot_interval=10, verbose=0):
-        super(RewardPlottingCallback, self).__init__(verbose)
+        super(EnhancedRewardPlottingCallback, self).__init__(verbose)
         self.plot_interval = plot_interval
         self.rewards = []
         self.moving_avg_rewards = []
@@ -248,29 +247,19 @@ class RewardPlottingCallback(BaseCallback):
         self.episode_count = 0
         self.episode_reward = 0
         self.window_size = 20  # For moving average
-        self.initial_episode_offset = 0 # For resuming plots
+        self.initial_episode_offset = 0
+        
+        # Setpoint tracking
+        self.setpoint_history = []
+        self.episode_setpoints = {}
 
     def _on_training_start(self) -> None:
-        """
-        This method is called before the first rollout starts.
-        If resuming, we might want to offset the episode count on the plot.
-        """
-        # If model.num_timesteps > 0, it's likely a resumed training.
-        # However, accurately getting the *episode* count from just timesteps is tricky
-        # if episode lengths vary. For simplicity, we'll restart plot numbering,
-        # or the user could manually pass an offset if they track episodes externally.
-        # For now, we'll just reset, meaning plots are per-training-run.
-        # If you need continuous plots, you'd need to save/load callback state.
+        """Initialize tracking"""
         if self.model.num_timesteps > 0 and self.model.logger:
-             # Try to get previous episode count if logged. This is an approximation.
             try:
-                # This depends on how you log episodes.
-                # If you have a 'rollout/ep_len_mean' and 'rollout/ep_rew_mean'
-                # you could estimate, but it's not straightforward.
-                # For simplicity, the plot will restart its episode count.
                 print(f"Resuming training. Plot episode count will restart from 1 for this session.")
             except Exception:
-                pass # Oh well, can't get it.
+                pass
 
     def _on_step(self) -> bool:
         # Accumulate reward
@@ -281,7 +270,18 @@ class RewardPlottingCallback(BaseCallback):
             self.episode_count += 1
             self.rewards.append(self.episode_reward)
             self.episodes.append(self.initial_episode_offset + self.episode_count)
-            self.episode_reward = 0 # Reset for next episode
+            
+            # Extract setpoint information from info if available
+            info = self.locals.get("infos", [{}])[0]
+            if 'setpoint_values' in info:
+                self.episode_setpoints[self.episode_count] = info['setpoint_values']
+                self.setpoint_history.append(info['setpoint_values'])
+                
+                if self.verbose > 0:
+                    setpoint_info = info.get('setpoint_info', 'No setpoint info')
+                    print(f"Episode {self.episode_count}: {setpoint_info}")
+            
+            self.episode_reward = 0  # Reset for next episode
 
             # Calculate moving average
             if len(self.rewards) >= self.window_size:
@@ -292,30 +292,125 @@ class RewardPlottingCallback(BaseCallback):
 
             # Plot at specified intervals
             if self.episode_count % self.plot_interval == 0:
-                plt.figure(figsize=(10, 6))
-                plt.plot(self.episodes, self.rewards, 'b-', alpha=0.3, label='Episode Reward')
-                plt.plot(self.episodes, self.moving_avg_rewards, 'r-', label=f'Moving Avg ({self.window_size} episodes)')
-                plt.xlabel('Episode')
-                plt.ylabel('Reward')
-                plt.title('Training Rewards (Current Session)')
-                plt.legend()
-                plt.grid(True)
-                # Ensure logger dir exists before saving
-                if self.model.logger and self.model.logger.dir:
-                    os.makedirs(self.model.logger.dir, exist_ok=True)
-                    plt.savefig(f"{self.model.logger.dir}/reward_plot_session.png")
-                plt.close()
+                self._create_enhanced_plots()
 
                 # Log to stable-baselines logger
                 if self.model.logger:
                     self.model.logger.record("reward/episode_reward", self.rewards[-1])
                     self.model.logger.record("reward/moving_avg", self.moving_avg_rewards[-1])
                     self.model.logger.record("reward/episode_count_session", self.episode_count)
-
+                    
+                    # Log setpoint diversity metrics
+                    if self.setpoint_history:
+                        recent_setpoints = self.setpoint_history[-self.plot_interval:]
+                        pos_z_std = np.std([sp['pos_z'] for sp in recent_setpoints])
+                        ori_z_std = np.std([sp['ori_z'] for sp in recent_setpoints])
+                        vel_x_std = np.std([sp['vel_x'] for sp in recent_setpoints])
+                        
+                        self.model.logger.record("setpoint/pos_z_diversity", pos_z_std)
+                        self.model.logger.record("setpoint/ori_z_diversity", ori_z_std)
+                        self.model.logger.record("setpoint/vel_x_diversity", vel_x_std)
 
                 if self.verbose > 0:
                     print(f"Episode {self.episode_count} (Session), Reward: {self.rewards[-1]:.2f}, Moving Avg: {self.moving_avg_rewards[-1]:.2f}")
         return True
+    
+    def _create_enhanced_plots(self):
+        """Create enhanced plots including setpoint tracking"""
+        if not self.model.logger or not self.model.logger.dir:
+            return
+            
+        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+        
+        # Reward plot
+        axes[0, 0].plot(self.episodes, self.rewards, 'b-', alpha=0.3, label='Episode Reward')
+        axes[0, 0].plot(self.episodes, self.moving_avg_rewards, 'r-', label=f'Moving Avg ({self.window_size} episodes)')
+        axes[0, 0].set_xlabel('Episode')
+        axes[0, 0].set_ylabel('Reward')
+        axes[0, 0].set_title('Training Rewards (Current Session)')
+        axes[0, 0].legend()
+        axes[0, 0].grid(True)
+        
+        # Setpoint diversity plots
+        if self.setpoint_history:
+            recent_episodes = min(50, len(self.setpoint_history))
+            recent_setpoints = self.setpoint_history[-recent_episodes:]
+            episode_nums = list(range(len(self.setpoint_history) - recent_episodes + 1, len(self.setpoint_history) + 1))
+            
+            # Position Z (depth) targets
+            pos_z_values = [sp['pos_z'] for sp in recent_setpoints]
+            axes[0, 1].scatter(episode_nums, pos_z_values, alpha=0.6, s=20)
+            axes[0, 1].set_xlabel('Episode')
+            axes[0, 1].set_ylabel('Depth Target (m)')
+            axes[0, 1].set_title(f'Depth Setpoints (Last {recent_episodes} episodes)')
+            axes[0, 1].grid(True)
+            
+            # Orientation Z (yaw) targets
+            ori_z_values = [sp['ori_z'] for sp in recent_setpoints]
+            axes[1, 0].scatter(episode_nums, ori_z_values, alpha=0.6, s=20, color='orange')
+            axes[1, 0].set_xlabel('Episode')
+            axes[1, 0].set_ylabel('Yaw Target (rad)')
+            axes[1, 0].set_title(f'Yaw Setpoints (Last {recent_episodes} episodes)')
+            axes[1, 0].grid(True)
+            
+            # Velocity X (surge) targets
+            vel_x_values = [sp['vel_x'] for sp in recent_setpoints]
+            axes[1, 1].scatter(episode_nums, vel_x_values, alpha=0.6, s=20, color='green')
+            axes[1, 1].set_xlabel('Episode')
+            axes[1, 1].set_ylabel('Surge Target (m/s)')
+            axes[1, 1].set_title(f'Surge Velocity Setpoints (Last {recent_episodes} episodes)')
+            axes[1, 1].grid(True)
+        else:
+            # No setpoint data available
+            for i in range(1, 4):
+                ax = axes.flat[i]
+                ax.text(0.5, 0.5, 'No setpoint data available', 
+                       transform=ax.transAxes, ha='center', va='center')
+                ax.set_title(f'Setpoint Plot {i}')
+        
+        plt.tight_layout()
+        plot_path = os.path.join(self.model.logger.dir, "enhanced_training_plots.png")
+        plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        # Save setpoint summary
+        if self.setpoint_history:
+            self._save_setpoint_summary()
+    
+    def _save_setpoint_summary(self):
+        """Save a summary of setpoint diversity"""
+        if not self.setpoint_history:
+            return
+            
+        summary_path = os.path.join(self.model.logger.dir, "setpoint_summary.txt")
+        with open(summary_path, 'w') as f:
+            f.write(f"Setpoint Summary for {len(self.setpoint_history)} episodes\n")
+            f.write("=" * 50 + "\n\n")
+            
+            # Calculate statistics
+            pos_z_values = [sp['pos_z'] for sp in self.setpoint_history]
+            ori_z_values = [sp['ori_z'] for sp in self.setpoint_history]
+            vel_x_values = [sp['vel_x'] for sp in self.setpoint_history]
+            
+            f.write("Depth (pos_z) statistics:\n")
+            f.write(f"  Range: {min(pos_z_values):.2f} to {max(pos_z_values):.2f} m\n")
+            f.write(f"  Mean: {np.mean(pos_z_values):.2f} m\n")
+            f.write(f"  Std: {np.std(pos_z_values):.2f} m\n\n")
+            
+            f.write("Yaw (ori_z) statistics:\n")
+            f.write(f"  Range: {min(ori_z_values):.2f} to {max(ori_z_values):.2f} rad\n")
+            f.write(f"  Mean: {np.mean(ori_z_values):.2f} rad\n")
+            f.write(f"  Std: {np.std(ori_z_values):.2f} rad\n\n")
+            
+            f.write("Surge velocity (vel_x) statistics:\n")
+            f.write(f"  Range: {min(vel_x_values):.2f} to {max(vel_x_values):.2f} m/s\n")
+            f.write(f"  Mean: {np.mean(vel_x_values):.2f} m/s\n")
+            f.write(f"  Std: {np.std(vel_x_values):.2f} m/s\n\n")
+            
+            f.write("Recent 10 episodes setpoints:\n")
+            for i, sp in enumerate(self.setpoint_history[-10:], 1):
+                episode_num = len(self.setpoint_history) - 10 + i
+                f.write(f"  Episode {episode_num}: depth={sp['pos_z']:.2f}m, yaw={sp['ori_z']:.2f}rad, surge={sp['vel_x']:.2f}m/s\n")
 
 def load_config(config_path):
     """Load configuration from YAML file"""
@@ -326,7 +421,7 @@ def load_config(config_path):
         raise RuntimeError(f"Failed to load configuration from {config_path}: {e}")
 
 def main():
-    parser = argparse.ArgumentParser(description='Train SAC agent for AUV control')
+    parser = argparse.ArgumentParser(description='Train SAC agent for AUV control with integrated setpoint management')
     parser.add_argument('--config', type=str, default='config/config_sac.yaml', help='Path to config file')
     parser.add_argument('--mode', type=str, default='train', choices=['train', 'test'], help='Training or testing mode')
     parser.add_argument('--model', type=str, default=None, help='Path to model file for testing OR initial model for transfer learning (not resume)')
@@ -336,40 +431,40 @@ def main():
     args = parser.parse_args()
 
     # Load configuration
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.config) # Use abspath for robustness
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), args.config)
     config = load_config(config_path)
 
     # Set random seed
     random_seed = config['others']['random_seed']
     np.random.seed(random_seed)
     th.manual_seed(random_seed)
-    # th.cuda.manual_seed_all(random_seed) # if using CUDA
 
-    # Create environment
+    # Create environment (now with integrated setpoint publisher)
+    print("Creating AUV environment with integrated setpoint management...")
     env = AUVEnv()
+    print("Environment created successfully!")
 
-    # Limit episode length (AUVEnv should handle this internally via its _max_episode_steps)
-    max_episode_steps = config['training']['max_t']
-    # env = TimeLimit(env, max_episode_steps=max_episode_steps) # Usually not needed if env has its own max steps
+    # Display setpoint configuration
+    setpoint_config = config.get('setpoint', {})
+    print(f"\nSetpoint Configuration:")
+    print(f"  Depth range: {setpoint_config.get('pos_z_range', [1.0, 8.0])} m")
+    print(f"  Yaw range: {setpoint_config.get('ori_z_range', [-2.14, 2.14])} rad")
+    print(f"  Pitch range: {setpoint_config.get('ori_y_range', [-0.1, 0.1])} rad")
+    print(f"  Surge velocity range: {setpoint_config.get('vel_x_range', [-0.6, 0.6])} m/s")
+    print("Setpoints will change at the beginning of each episode.")
 
     # Set up logging directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     if args.resume_from_checkpoint:
-        # Option 1: Log to a new directory for the resumed session
         log_dir_base_name = os.path.splitext(os.path.basename(args.resume_from_checkpoint))[0]
         log_dir = os.path.join("logs", f"sac_resumed_{log_dir_base_name}_{timestamp}")
-        # Option 2: Try to log to the same directory (more complex to manage)
-        # log_dir = os.path.dirname(os.path.dirname(args.resume_from_checkpoint)) # e.g. logs/sac_XXXX
     else:
-        log_dir = os.path.join("logs", f"sac_{timestamp}")
+        log_dir = os.path.join("logs", f"sac_episodic_setpoints_{timestamp}")
     os.makedirs(log_dir, exist_ok=True)
     print(f"Logging to: {log_dir}")
 
-
     if args.mode == 'train':
         # Configure SAC hyperparameters from config
-        # These are used if starting fresh or if you want to override specific things
-        # when loading (though many params are part of the loaded model)
         learning_rate = config['agent']['learning_rate']
         buffer_size = config['agent']['buffer_size']
         batch_size = config['agent']['batch_size']
@@ -380,27 +475,20 @@ def main():
         replay_buffer_kwargs = config['agent'].get('replay_buffer_kwargs', None)
         policy_kwargs = {
             "net_arch": config['qnetwork']['actor_hidden_layers'],
-            # "net_arch": dict(pi=config['qnetwork']['actor_hidden_layers'], qf=config['qnetwork']['critic_hidden_layers']) # If you define separate critic arch
         }
 
         if args.resume_from_checkpoint:
             print(f"Resuming training from checkpoint: {args.resume_from_checkpoint}")
             model = SAC.load(
                 args.resume_from_checkpoint,
-                env=env, # CRITICAL: Must provide env for continued training
-                tensorboard_log=log_dir, # Point tensorboard to the new log directory
-                # device='auto' # Or specific device
-                # You can also override some parameters here if needed, e.g., learning_rate
-                # learning_rate=new_lr_for_resumed_training,
+                env=env,
+                tensorboard_log=log_dir,
             )
-            print(f"Model loaded. Current timesteps: {model.num_timesteps}. Training will continue up to the target total_timesteps.")
-            print(f"Original learning rate (from loaded model): {model.learning_rate}")
-             # If you want to change the learning rate for the resumed session:
-            # model.learning_rate = 0.0001 # Example: new learning rate
-            # print(f"Set new learning rate for resumed session: {model.learning_rate}")
+            print(f"Model loaded. Current timesteps: {model.num_timesteps}")
+            print(f"Training will continue with episode-based setpoint changes.")
 
         else:
-            print("Starting new training session.")
+            print("Starting new training session with episode-based setpoint changes.")
             model = SAC(
                 "MlpPolicy",
                 env,
@@ -414,26 +502,26 @@ def main():
                 seed=random_seed,
                 policy_kwargs=policy_kwargs,
                 replay_buffer_kwargs=replay_buffer_kwargs,
-                verbose=1, # Changed to 1 for less spam, 2 is very verbose
+                verbose=1,
                 tensorboard_log=log_dir
             )
             print(f"Learning rate: {learning_rate}, buffer_size: {buffer_size}, batch_size: {batch_size}")
             print(f"Actor network: {config['qnetwork']['actor_hidden_layers']}")
 
-
-        # Configure custom logger (do this AFTER model is created or loaded)
+        # Configure custom logger
         new_logger = configure(log_dir, ["stdout", "csv", "tensorboard"])
         model.set_logger(new_logger)
 
         # Set up callbacks
-        # Checkpoint callback saves relative to model.save_path, which is based on logger.dir
+        max_episode_steps = config['training']['max_t']
         checkpoint_callback = CheckpointCallback(
-            save_freq=max(config['training']['save_freq_timesteps'], max_episode_steps), # Save e.g. every N timesteps
-            save_path=os.path.join(log_dir, "checkpoints"), # Explicitly save in the current log_dir
-            name_prefix="sac_auv_model"
+            save_freq=max(config['training']['save_freq_timesteps'], max_episode_steps),
+            save_path=os.path.join(log_dir, "checkpoints"),
+            name_prefix="sac_auv_episodic_setpoints"
         )
 
-        plot_callback = RewardPlottingCallback(
+        # Use enhanced plotting callback
+        plot_callback = EnhancedRewardPlottingCallback(
             plot_interval=config['plotting']['plot_interval'],
             verbose=1
         )
@@ -448,28 +536,39 @@ def main():
         if args.timesteps:
             total_timesteps = args.timesteps
         else:
-            total_timesteps = config['training']['max_episodes'] * max_episode_steps # Use max_episode_steps from config
+            total_timesteps = config['training']['max_episodes'] * max_episode_steps
 
         remaining_timesteps = total_timesteps - model.num_timesteps
         if remaining_timesteps <= 0:
             print(f"Model already trained for {model.num_timesteps} timesteps. Target total_timesteps {total_timesteps} already met or exceeded.")
             print("If you want to train further, increase --timesteps or config['training']['max_episodes'].")
         else:
-            print(f"Starting SAC training. Current timesteps: {model.num_timesteps}. Target timesteps: {total_timesteps}. Remaining: {remaining_timesteps}")
+            print(f"Starting SAC training with episode-based setpoints.")
+            print(f"Current timesteps: {model.num_timesteps}. Target timesteps: {total_timesteps}. Remaining: {remaining_timesteps}")
             print(f"Gradient monitoring interval: {args.gradient_monitor_interval} steps")
+            print(f"Each episode will have a new random setpoint generated at reset.")
+            
             try:
                 model.learn(
-                    total_timesteps=total_timesteps, # This is the CUMULATIVE total
+                    total_timesteps=total_timesteps,
                     callback=[checkpoint_callback, plot_callback, gradient_callback],
-                    log_interval=1, # Log every N rollouts/episodes (depends on n_envs)
-                    reset_num_timesteps=False # IMPORTANT: Do NOT reset timesteps when resuming
+                    log_interval=1,
+                    reset_num_timesteps=False
                 )
 
                 final_model_path = os.path.join(log_dir, "final_model")
                 model.save(final_model_path)
                 print(f"Training completed. Final model saved to {final_model_path}. Total timesteps: {model.num_timesteps}")
 
-                # Print final gradient monitoring summary
+                # Print final summaries
+                print(f"\n--- Final Training Summary ---")
+                print(f"Total episodes completed: {plot_callback.episode_count}")
+                print(f"Setpoint diversity achieved: {len(plot_callback.setpoint_history)} unique setpoints")
+                
+                if plot_callback.setpoint_history:
+                    print(f"Depth range explored: {min(sp['pos_z'] for sp in plot_callback.setpoint_history):.2f} to {max(sp['pos_z'] for sp in plot_callback.setpoint_history):.2f} m")
+                    print(f"Yaw range explored: {min(sp['ori_z'] for sp in plot_callback.setpoint_history):.2f} to {max(sp['ori_z'] for sp in plot_callback.setpoint_history):.2f} rad")
+
                 print(f"\n--- Final Gradient Monitoring Summary ---")
                 print("Total Updates by Network:")
                 for network, count in gradient_callback.update_counts.items():
@@ -483,11 +582,7 @@ def main():
 
     elif args.mode == 'test':
         if args.model is None:
-            # Try to find the latest model in the log_dir if resuming for test
             if args.resume_from_checkpoint:
-                # A bit heuristic: assume 'final_model.zip' or 'interrupted_model.zip' might exist
-                # in the log_dir associated with the checkpoint's parent.
-                # This part can be made more robust.
                 potential_log_dir = os.path.dirname(os.path.dirname(args.resume_from_checkpoint))
                 final_model_path = os.path.join(potential_log_dir, "final_model.zip")
                 interrupted_model_path = os.path.join(potential_log_dir, "interrupted_model.zip")
@@ -496,7 +591,6 @@ def main():
                 elif os.path.exists(interrupted_model_path):
                     model_path_to_test = interrupted_model_path
                 else:
-                    # Fallback to the checkpoint itself if no final model found in its original log dir
                     model_path_to_test = args.resume_from_checkpoint
                 print(f"Testing with model: {model_path_to_test} (derived from resume_from_checkpoint)")
             else:
@@ -508,68 +602,107 @@ def main():
         model = SAC.load(model_path_to_test, env=env) 
 
         # Test the model
-        print("Starting evaluation...")
+        print("Starting evaluation with episode-based setpoint changes...")
+        max_episode_steps = config['training']['max_t']
         test_episodes = config['evaluation']['num_episodes']
         episode_rewards = []
         episode_lengths = []
+        episode_setpoints = []
 
         for episode in range(test_episodes):
-            # Correctly unpack the return from env.reset()
-            obs, info = env.reset() # obs is now the NumPy array
+            obs, info = env.reset()
             episode_reward = 0
-            # Use terminated and truncated flags from Gymnasium
             terminated = False
             truncated = False
             step = 0
+            
+            # Store setpoint info for this episode
+            episode_setpoints.append(info.get('setpoint_info', 'No setpoint info'))
+            print(f"Episode {episode+1}/{test_episodes}: {info.get('setpoint_info', 'No setpoint info')}")
 
-            # Update loop condition
             while not (terminated or truncated):
-                # Pass only the observation array to model.predict()
                 action, _ = model.predict(obs, deterministic=True)
-                # action, _ = env.last_action
-                # Correctly unpack the return from env.step()
                 next_obs, reward, terminated, truncated, info = env.step(action)
                 
                 episode_reward += reward
                 step += 1
-                
-                # Update obs for the next iteration
                 obs = next_obs
 
-                # Your env.render call (ensure it's implemented or comment out if not needed)
-                # env.render(mode='human')
-                # time.sleep(0.01)
-
                 if step % 50 == 0 and config['evaluation']['verbose']:
-                    print(f"Episode {episode+1}/{test_episodes}, Step {step}, Action: {action}, Reward: {reward:.4f}")
-                if step >= max_episode_steps :
-                    print(f"Warning: Episode {episode+1} reached max_episode_steps ({max_episode_steps}) set in test script.")
+                    print(f"  Step {step}, Action: {action}, Reward: {reward:.4f}")
+                if step >= max_episode_steps:
+                    print(f"  Warning: Episode {episode+1} reached max_episode_steps ({max_episode_steps})")
                     truncated = True
-
 
             episode_rewards.append(episode_reward)
             episode_lengths.append(step)
-            print(f"Episode {episode+1} completed. Reward: {episode_reward:.4f}, Length: {step}")
+            print(f"  Episode {episode+1} completed. Reward: {episode_reward:.4f}, Length: {step}")
 
-        # Plot evaluation results
-        eval_plot_path = os.path.join(log_dir, "evaluation_results.png") # Save in current session's log_dir
-        plt.figure(figsize=(10, 6))
-        plt.bar(range(1, test_episodes+1), episode_rewards)
-        plt.xlabel('Episode')
-        plt.ylabel('Total Reward')
-        plt.title(f'Evaluation Results ({os.path.basename(model_path_to_test)})')
-        plt.grid(True, axis='y')
-        plt.savefig(eval_plot_path)
-        print(f"Evaluation plot saved to {eval_plot_path}")
+        # Enhanced evaluation plotting
+        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+        
+        # Episode rewards
+        axes[0, 0].bar(range(1, test_episodes+1), episode_rewards)
+        axes[0, 0].set_xlabel('Episode')
+        axes[0, 0].set_ylabel('Total Reward')
+        axes[0, 0].set_title(f'Evaluation Results ({os.path.basename(model_path_to_test)})')
+        axes[0, 0].grid(True, axis='y')
+        
+        # Episode lengths
+        axes[0, 1].bar(range(1, test_episodes+1), episode_lengths, color='orange')
+        axes[0, 1].set_xlabel('Episode')
+        axes[0, 1].set_ylabel('Episode Length (steps)')
+        axes[0, 1].set_title('Episode Lengths')
+        axes[0, 1].grid(True, axis='y')
+        
+        # Reward vs Length scatter
+        axes[1, 0].scatter(episode_lengths, episode_rewards, alpha=0.7)
+        axes[1, 0].set_xlabel('Episode Length (steps)')
+        axes[1, 0].set_ylabel('Total Reward')
+        axes[1, 0].set_title('Reward vs Episode Length')
+        axes[1, 0].grid(True)
+        
+        # Summary statistics
+        axes[1, 1].axis('off')
+        stats_text = f"""Evaluation Summary:
+Episodes: {test_episodes}
+Avg Reward: {np.mean(episode_rewards):.2f} ± {np.std(episode_rewards):.2f}
+Avg Length: {np.mean(episode_lengths):.1f} ± {np.std(episode_lengths):.1f}
+Best Reward: {max(episode_rewards):.2f}
+Worst Reward: {min(episode_rewards):.2f}
+
+Setpoint Diversity:
+Each episode had a unique setpoint
+Testing across varied conditions"""
+        axes[1, 1].text(0.1, 0.9, stats_text, transform=axes[1, 1].transAxes, 
+                        fontsize=12, verticalalignment='top', fontfamily='monospace')
+        
+        plt.tight_layout()
+        eval_plot_path = os.path.join(log_dir, "evaluation_results_enhanced.png")
+        plt.savefig(eval_plot_path, dpi=150, bbox_inches='tight')
+        print(f"Enhanced evaluation plot saved to {eval_plot_path}")
         plt.close()
 
-        avg_reward = np.mean(episode_rewards)
-        std_reward = np.std(episode_rewards)
-        avg_length = np.mean(episode_lengths)
-        print(f"\nEvaluation Summary ({os.path.basename(model_path_to_test)}):")
+        # Save detailed evaluation report
+        eval_report_path = os.path.join(log_dir, "evaluation_report.txt")
+        with open(eval_report_path, 'w') as f:
+            f.write(f"Evaluation Report\n")
+            f.write("=" * 50 + "\n\n")
+            f.write(f"Model: {os.path.basename(model_path_to_test)}\n")
+            f.write(f"Episodes: {test_episodes}\n")
+            f.write(f"Average Reward: {np.mean(episode_rewards):.4f} ± {np.std(episode_rewards):.4f}\n")
+            f.write(f"Average Length: {np.mean(episode_lengths):.2f} ± {np.std(episode_lengths):.2f}\n\n")
+            
+            f.write("Episode Details:\n")
+            for i, (reward, length, setpoint) in enumerate(zip(episode_rewards, episode_lengths, episode_setpoints)):
+                f.write(f"Episode {i+1}: Reward={reward:.4f}, Length={length}, {setpoint}\n")
+
+        print(f"\nEvaluation Summary:")
         print(f"Number of episodes: {test_episodes}")
-        print(f"Average Reward: {avg_reward:.4f} ± {std_reward:.4f}")
-        print(f"Average Length: {avg_length:.2f} steps")
+        print(f"Average Reward: {np.mean(episode_rewards):.4f} ± {np.std(episode_rewards):.4f}")
+        print(f"Average Length: {np.mean(episode_lengths):.2f} ± {np.std(episode_lengths):.2f}")
+        print(f"Each episode tested with a different random setpoint")
+        print(f"Detailed report saved to: {eval_report_path}")
 
 if __name__ == "__main__":
     main()

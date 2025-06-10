@@ -1,0 +1,100 @@
+# Core Dependencies for DreamerV3 AUV Control System
+# ====================================================
+
+# JAX and neural networks
+jax[cuda]>=0.4.0,<0.5.0
+jaxlib>=0.4.0,<0.5.0
+dm-haiku>=0.0.9,<0.1.0
+optax>=0.1.4,<0.2.0
+
+# Gymnasium and RL
+gymnasium>=0.26.0
+stable-baselines3>=2.0.0  # For comparison and migration
+
+# Scientific computing
+numpy>=1.21.0,<2.0.0
+scipy>=1.7.0
+pandas>=1.3.0
+
+# Configuration and serialization  
+pyyaml>=6.0
+pickle5>=0.0.11
+h5py>=3.6.0
+
+# Visualization
+matplotlib>=3.5.0
+seaborn>=0.11.0
+plotly>=5.0.0
+
+# Progress and utilities
+tqdm>=4.64.0
+click>=8.0.0
+rich>=12.0.0
+
+# ROS2 dependencies (install via system package manager)
+# sudo apt install ros-humble-desktop ros-humble-ros2bag
+# pip install these ROS2 Python packages:
+rosbag2-py>=0.15.0  # For offline data processing
+rclpy>=3.3.0        # ROS2 Python client library
+
+# Threading and async
+threading-utils>=0.3.0
+
+# Development dependencies (optional)
+# =====================================
+
+# Code quality
+black>=22.0.0
+isort>=5.10.0
+flake8>=5.0.0
+mypy>=0.971
+
+# Testing
+pytest>=7.0.0
+pytest-cov>=4.0.0
+pytest-mock>=3.8.0
+
+# Documentation
+sphinx>=5.0.0
+sphinx-rtd-theme>=1.0.0
+
+# Profiling and monitoring
+memory-profiler>=0.60.0
+line-profiler>=3.5.0
+psutil>=5.9.0
+
+# Jupyter for analysis (optional)
+jupyter>=1.0.0
+ipython>=8.0.0
+
+# Docker and containerization (optional)
+# ======================================
+docker>=6.0.0
+docker-compose>=1.29.0
+
+# GPU monitoring (if using NVIDIA GPUs)
+# =====================================
+gpustat>=1.0.0
+py3nvml>=0.2.7
+
+# AUV-specific dependencies
+# =========================
+# These are custom ROS2 message packages - install from source
+# mvp_msgs  # Custom AUV control messages
+# auv_msgs  # Additional AUV message definitions
+
+# Platform-specific notes:
+# ========================
+# Ubuntu 22.04 (recommended):
+# - Install ROS2 Humble: https://docs.ros.org/en/humble/Installation.html
+# - CUDA 11.8+ for GPU acceleration
+# - Python 3.8-3.11 supported
+
+# Windows (experimental):
+# - Use WSL2 with Ubuntu 22.04
+# - CUDA support through WSL2
+# - ROS2 Humble Windows build
+
+# macOS (CPU only):
+# - JAX CPU version: pip install jax[cpu]
+# - ROS2 may require Docker or VM
