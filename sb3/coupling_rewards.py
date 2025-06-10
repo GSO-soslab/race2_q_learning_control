@@ -272,7 +272,7 @@ class CouplingAwareRewardCalculator:
         try:
             # Extract errors with safe indexing
             depth_error = float(state_error_array[0])
-            surge_error = float(state_error_array[1])
+            surge_error = 10.0 * float(state_error_array[1]) # to scaLe surge up compared to other guys
             
             pitch_sin_err, pitch_cos_err = float(state_error_array[6]), float(state_error_array[7])
             yaw_sin_err, yaw_cos_err = float(state_error_array[8]), float(state_error_array[9])
@@ -314,7 +314,7 @@ class CouplingAwareRewardCalculator:
                 2.0 * pitch_error_mag**2 +  # ENHANCED: 2x weight for pitch
                 1.5 * yaw_error_mag**2       # ENHANCED: 1.5x weight for yaw offset
             )
-            
+            print("Surge Error", surge_error**2)
             # ENHANCED: Asymmetric surge penalty
             surge_asymmetry_penalty = 0
             if len(self.error_history) > 5:
@@ -366,6 +366,13 @@ class CouplingAwareRewardCalculator:
                     velocity_depth**2
                 )
             
+            print("individual_energy:", individual_energy)
+            print("surge_yaw_spring_energy:", surge_yaw_spring_energy)
+            print("pitch_depth_spring_energy:", pitch_depth_spring_energy)
+            print("damping_energy:", damping_energy)
+            print("surge_asymmetry_penalty:", surge_asymmetry_penalty)
+            print("yaw_bias_penalty:", yaw_bias_penalty)
+
             # Total enhanced energy
             total_energy = (individual_energy + 
                         surge_yaw_spring_energy + 
@@ -373,7 +380,7 @@ class CouplingAwareRewardCalculator:
                         damping_energy +
                         surge_asymmetry_penalty +
                         yaw_bias_penalty)
-            
+            print("total_energy:", yaw_bias_penalty)
             # ENHANCED: Adaptive energy scaling
             # Scale energy penalty based on learning progress
             if episode_num < 1000:
@@ -385,6 +392,7 @@ class CouplingAwareRewardCalculator:
             
             # Return negative scaled energy
             # return float(-total_energy * energy_scale)
+
             return float(-total_energy * energy_scale + surge_progress_bonus)
         
         except Exception as e:

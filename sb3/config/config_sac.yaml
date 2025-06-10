@@ -19,7 +19,7 @@ others:
 
 environment:
   thruster_size: 4
-  servo_joints_size: 2
+  servo_joints_size: 0
   max_action: 1.0
   min_servo_angle_rad: -1.57 # -45 degrees in radians
   max_servo_angle_rad: 1.57 # 45 degrees in radians
@@ -30,14 +30,15 @@ training:
   save_freq_timesteps: 10
 
 agent:
-  learning_rate: 0.00008        # REDUCED - slower learning for stability
+  learning_rate: 0.0003        # REDUCED - slower learning for stability
   buffer_size: 1000000
-  batch_size: 16
+  batch_size: 
   gamma: 0.99
   tau: 0.005
   ent_coef: auto            # REDUCED - less exploration, more exploitation
   target_update_interval: 1
   # replay_buffer_kwargs: # Optional arguments for the replay buffer
+  learning_starts: 500
 
 qnetwork:
   actor_hidden_layers: [300, 256, 128]
