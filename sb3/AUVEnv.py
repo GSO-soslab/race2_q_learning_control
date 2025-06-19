@@ -515,7 +515,7 @@ class AUVEnv(gym.Env):
             initial_observation = self.csv_manager._get_current_state_observation()
             
         else:
-            # Online mode: your existing reset logic
+            # Online mode: 
             setpoint = self.node.publish_new_setpoint()
             self.current_episode_setpoint_info = self.node.get_current_setpoint_info()
             
@@ -530,7 +530,6 @@ class AUVEnv(gym.Env):
             time.sleep(0.01)
             self._spin_node(timeout_sec=0.3)
             
-            # Your existing observation building logic...
             depth = self.node.position_state[2:3]
             surge = self.node.v_state[0:1]
             sway = self.node.v_state[1:2]
@@ -647,7 +646,7 @@ class AUVEnv(gym.Env):
         original_node = self.node
         self.node = self._mock_node
         
-        # Calculate reward using existing logic
+        # Calculate reward
         reward = self.calculate_reward(state_error_array)
         if isinstance(reward, np.ndarray):
             reward = float(reward.item())
@@ -899,8 +898,6 @@ class AUVEnv(gym.Env):
         # Apply performance weight
         w = self.config['reward_function']
         coupling_performance_reward = w['w1'] * performance_error
-        
-        # Keep existing penalty calculations
         
         # Servo smoothness penalty using sine and cosine components
         servo_smoothness_penalty = 0
