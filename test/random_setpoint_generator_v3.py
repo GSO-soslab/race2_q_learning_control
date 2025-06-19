@@ -12,11 +12,11 @@ class SimpleSetPointPublisher(Node):
         super().__init__('simple_set_point_publisher')
         # Parameters
         self.declare_parameter('rate_hz', 5.0)
-        self.declare_parameter('random_duration', 200.0)
+        self.declare_parameter('random_duration', 100.0)
         self.declare_parameter('pos_z_range', [1.0, 8.0])
-        self.declare_parameter('ori_z_range', [-2.14, 2.14])
+        self.declare_parameter('ori_z_range', [-3.0, 3.0])
         self.declare_parameter('ori_y_range', [-0.1, 0.1])
-        self.declare_parameter('vel_x_range', [-0.6, 0.6])
+        self.declare_parameter('vel_x_range', [-0.3, 0.3])
         
         self.rate_hz = self.get_parameter('rate_hz').value
         self.random_duration = self.get_parameter('random_duration').value

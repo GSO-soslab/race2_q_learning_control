@@ -19,9 +19,10 @@ import torch.nn as nn
 # For environment compatibility
 import gym
 
-# Import custom environment (now with integrated setpoint publisher)
+# Import custom environment (now with integrated setpoint publisher AND CSV support)
 from AUVEnv import AUVEnv
 
+# Your existing callback classes remain exactly the same...
 class WarmupMonitoringCallback(BaseCallback):
     """
     Callback to monitor warmup phase and training transitions
@@ -286,7 +287,7 @@ class GradientMonitoringCallback(BaseCallback):
 class EnhancedRewardPlottingCallback(BaseCallback):
     """
     Enhanced callback for plotting rewards with setpoint tracking during training
-    Enhanced to handle warmup period
+    Enhanced to handle warmup period and CSV mode
     """
     def __init__(self, plot_interval=10, verbose=0):
         super(EnhancedRewardPlottingCallback, self).__init__(verbose)
@@ -299,9 +300,12 @@ class EnhancedRewardPlottingCallback(BaseCallback):
         self.window_size = 20  # For moving average
         self.initial_episode_offset = 0
         
-        # Setpoint tracking
+        # Setpoint tracking (for online mode)
         self.setpoint_history = []
         self.episode_setpoints = {}
+        
+        # CSV mode tracking
+        self.csv_episode_info = []
         
         # Warmup tracking
         self.warmup_episodes = 0
@@ -334,15 +338,26 @@ class EnhancedRewardPlottingCallback(BaseCallback):
                 self.training_episodes += 1
                 episode_phase = "TRAINING"
             
-            # Extract setpoint information from info if available
+            # Extract episode information
             info = self.locals.get("infos", [{}])[0]
+            
+            # Handle both online and CSV modes
             if 'setpoint_values' in info:
+                # Online mode
                 self.episode_setpoints[self.episode_count] = info['setpoint_values']
                 self.setpoint_history.append(info['setpoint_values'])
                 
                 if self.verbose > 0:
                     setpoint_info = info.get('setpoint_info', 'No setpoint info')
                     print(f"Episode {self.episode_count} ({episode_phase}): {setpoint_info}, Reward: {self.episode_reward:.2f}")
+            
+            elif 'csv_episode_info' in info:
+                # CSV mode
+                self.csv_episode_info.append(info['csv_episode_info'])
+                
+                if self.verbose > 0:
+                    csv_info = info.get('setpoint_info', 'CSV Episode')
+                    print(f"Episode {self.episode_count} ({episode_phase}): {csv_info}, Reward: {self.episode_reward:.2f}")
             
             self.episode_reward = 0  # Reset for next episode
 
@@ -365,8 +380,9 @@ class EnhancedRewardPlottingCallback(BaseCallback):
                     self.model.logger.record("reward/warmup_episodes", self.warmup_episodes)
                     self.model.logger.record("reward/training_episodes", self.training_episodes)
                     
-                    # Log setpoint diversity metrics
+                    # Log mode-specific metrics
                     if self.setpoint_history:
+                        # Online mode setpoint diversity metrics
                         recent_setpoints = self.setpoint_history[-self.plot_interval:]
                         pos_z_std = np.std([sp['pos_z'] for sp in recent_setpoints])
                         ori_z_std = np.std([sp['ori_z'] for sp in recent_setpoints])
@@ -375,6 +391,10 @@ class EnhancedRewardPlottingCallback(BaseCallback):
                         self.model.logger.record("setpoint/pos_z_diversity", pos_z_std)
                         self.model.logger.record("setpoint/ori_z_diversity", ori_z_std)
                         self.model.logger.record("setpoint/vel_x_diversity", vel_x_std)
+                    
+                    elif self.csv_episode_info:
+                        # CSV mode metrics
+                        self.model.logger.record("csv/episodes_completed", len(self.csv_episode_info))
 
                 if self.verbose > 0:
                     print(f"Episode {self.episode_count} (Session), Reward: {self.rewards[-1]:.2f}, Moving Avg: {self.moving_avg_rewards[-1]:.2f}")
@@ -382,7 +402,7 @@ class EnhancedRewardPlottingCallback(BaseCallback):
         return True
     
     def _create_enhanced_plots(self):
-        """Create enhanced plots including setpoint tracking and warmup indication"""
+        """Create enhanced plots for both online and CSV modes"""
         if not self.model.logger or not self.model.logger.dir:
             return
             
@@ -405,8 +425,9 @@ class EnhancedRewardPlottingCallback(BaseCallback):
         axes[0, 0].legend()
         axes[0, 0].grid(True)
         
-        # Setpoint diversity plots
+        # Mode-specific plots
         if self.setpoint_history:
+            # Online mode: setpoint diversity plots
             recent_episodes = min(50, len(self.setpoint_history))
             recent_setpoints = self.setpoint_history[-recent_episodes:]
             episode_nums = list(range(len(self.setpoint_history) - recent_episodes + 1, len(self.setpoint_history) + 1))
@@ -434,31 +455,66 @@ class EnhancedRewardPlottingCallback(BaseCallback):
             axes[1, 1].set_ylabel('Surge Target (m/s)')
             axes[1, 1].set_title(f'Surge Velocity Setpoints (Last {recent_episodes} episodes)')
             axes[1, 1].grid(True)
+            
+        elif self.csv_episode_info:
+            # CSV mode: data usage plots
+            recent_episodes = min(50, len(self.csv_episode_info))
+            recent_info = self.csv_episode_info[-recent_episodes:]
+            episode_nums = list(range(len(self.csv_episode_info) - recent_episodes + 1, len(self.csv_episode_info) + 1))
+            
+            # Episode start timestamps
+            start_times = [info['start_timestamp'] for info in recent_info]
+            axes[0, 1].scatter(episode_nums, start_times, alpha=0.6, s=20)
+            axes[0, 1].set_xlabel('Episode')
+            axes[0, 1].set_ylabel('Start Time (s)')
+            axes[0, 1].set_title(f'CSV Data Usage (Last {recent_episodes} episodes)')
+            axes[0, 1].grid(True)
+            
+            # Episode lengths
+            episode_lengths = [info['episode_length'] for info in recent_info]
+            axes[1, 0].scatter(episode_nums, episode_lengths, alpha=0.6, s=20, color='orange')
+            axes[1, 0].set_xlabel('Episode')
+            axes[1, 0].set_ylabel('Episode Length (steps)')
+            axes[1, 0].set_title(f'Episode Lengths')
+            axes[1, 0].grid(True)
+            
+            # CSV mode summary
+            axes[1, 1].axis('off')
+            csv_text = f"""CSV Training Mode:
+Episodes: {len(self.csv_episode_info)}
+Data Coverage: {min(start_times):.1f}s to {max(start_times):.1f}s
+Avg Episode Length: {np.mean(episode_lengths):.1f} steps
+Data-driven learning from real AUV recordings"""
+            axes[1, 1].text(0.1, 0.9, csv_text, transform=axes[1, 1].transAxes, 
+                            fontsize=12, verticalalignment='top', fontfamily='monospace')
+            
         else:
-            # No setpoint data available
+            # No specific mode data available
             for i in range(1, 4):
                 ax = axes.flat[i]
-                ax.text(0.5, 0.5, 'No setpoint data available', 
+                ax.text(0.5, 0.5, 'No mode-specific data available', 
                        transform=ax.transAxes, ha='center', va='center')
-                ax.set_title(f'Setpoint Plot {i}')
+                ax.set_title(f'Mode Plot {i}')
         
         plt.tight_layout()
         plot_path = os.path.join(self.model.logger.dir, "enhanced_training_plots.png")
         plt.savefig(plot_path, dpi=150, bbox_inches='tight')
         plt.close()
         
-        # Save setpoint summary
+        # Save mode-specific summary
         if self.setpoint_history:
             self._save_setpoint_summary()
+        elif self.csv_episode_info:
+            self._save_csv_summary()
     
     def _save_setpoint_summary(self):
-        """Save a summary of setpoint diversity"""
+        """Save a summary of setpoint diversity (online mode)"""
         if not self.setpoint_history:
             return
             
         summary_path = os.path.join(self.model.logger.dir, "setpoint_summary.txt")
         with open(summary_path, 'w') as f:
-            f.write(f"Setpoint Summary for {len(self.setpoint_history)} episodes\n")
+            f.write(f"Online Mode Setpoint Summary for {len(self.setpoint_history)} episodes\n")
             f.write("=" * 50 + "\n\n")
             f.write(f"Warmup episodes: {self.warmup_episodes}\n")
             f.write(f"Training episodes: {self.training_episodes}\n\n")
@@ -488,6 +544,34 @@ class EnhancedRewardPlottingCallback(BaseCallback):
                 episode_num = len(self.setpoint_history) - 10 + i
                 episode_type = "WARMUP" if episode_num <= self.warmup_episodes else "TRAINING"
                 f.write(f"  Episode {episode_num} ({episode_type}): depth={sp['pos_z']:.2f}m, yaw={sp['ori_z']:.2f}rad, surge={sp['vel_x']:.2f}m/s\n")
+    
+    def _save_csv_summary(self):
+        """Save a summary of CSV episode usage"""
+        if not self.csv_episode_info:
+            return
+            
+        summary_path = os.path.join(self.model.logger.dir, "csv_training_summary.txt")
+        with open(summary_path, 'w') as f:
+            f.write(f"CSV Mode Training Summary for {len(self.csv_episode_info)} episodes\n")
+            f.write("=" * 50 + "\n\n")
+            f.write(f"Warmup episodes: {self.warmup_episodes}\n")
+            f.write(f"Training episodes: {self.training_episodes}\n\n")
+            
+            # Calculate statistics
+            start_times = [info['start_timestamp'] for info in self.csv_episode_info]
+            episode_lengths = [info['episode_length'] for info in self.csv_episode_info]
+            
+            f.write("CSV Data Usage Statistics:\n")
+            f.write(f"  Time range covered: {min(start_times):.1f}s to {max(start_times):.1f}s\n")
+            f.write(f"  Episode length range: {min(episode_lengths)} to {max(episode_lengths)} steps\n")
+            f.write(f"  Average episode length: {np.mean(episode_lengths):.1f} steps\n")
+            f.write(f"  Total data duration: {max(start_times) - min(start_times):.1f}s\n\n")
+            
+            f.write("Recent 10 episodes:\n")
+            for i, info in enumerate(self.csv_episode_info[-10:], 1):
+                episode_num = len(self.csv_episode_info) - 10 + i
+                episode_type = "WARMUP" if episode_num <= self.warmup_episodes else "TRAINING"
+                f.write(f"  Episode {episode_num} ({episode_type}): start={info['start_timestamp']:.1f}s, length={info['episode_length']} steps\n")
 
 def load_config(config_path):
     """Load configuration from YAML file"""
@@ -498,14 +582,21 @@ def load_config(config_path):
         raise RuntimeError(f"Failed to load configuration from {config_path}: {e}")
 
 def main():
-    parser = argparse.ArgumentParser(description='Train SAC agent for AUV control with integrated setpoint management and warmup')
+    parser = argparse.ArgumentParser(description='Train SAC agent for AUV control with CSV or online training')
     parser.add_argument('--config', type=str, default='config/config_sac.yaml', help='Path to config file')
     parser.add_argument('--mode', type=str, default='train', choices=['train', 'test'], help='Training or testing mode')
-    parser.add_argument('--model', type=str, default=None, help='Path to model file for testing OR initial model for transfer learning (not resume)')
-    parser.add_argument('--resume_from_checkpoint', type=str, default=None, help='Path to a .zip model file to resume training from')
-    parser.add_argument('--timesteps', type=int, default=None, help='Total timesteps for training (overall target)')
-    parser.add_argument('--gradient_monitor_interval', type=int, default=100, help='Interval for gradient monitoring (default: 100)')
-    parser.add_argument('--learning_starts', type=int, default=None, help='Number of steps before training starts (warmup period)')
+    parser.add_argument('--model', type=str, default=None, help='Path to model file for testing')
+    parser.add_argument('--resume_from_checkpoint', type=str, default=None, help='Path to checkpoint to resume from')
+    parser.add_argument('--timesteps', type=int, default=None, help='Total timesteps for training')
+    parser.add_argument('--gradient_monitor_interval', type=int, default=100, help='Gradient monitoring interval')
+    parser.add_argument('--learning_starts', type=int, default=None, help='Warmup period steps')
+    
+    # NEW: Add CSV support arguments
+    parser.add_argument('--csv_directory', type=str, default=None, 
+                       help='Directory containing CSV files from rosbags for offline training')
+    parser.add_argument('--csv_mode', action='store_true', 
+                       help='Enable CSV mode (alternative to --csv_directory)')
+    
     args = parser.parse_args()
 
     # Load configuration
@@ -517,19 +608,46 @@ def main():
     np.random.seed(random_seed)
     th.manual_seed(random_seed)
 
-    # Create environment (now with integrated setpoint publisher)
-    print("Creating AUV environment with integrated setpoint management...")
-    env = AUVEnv()
-    print("Environment created successfully!")
+    # NEW: Determine training mode and create environment accordingly
+    if args.csv_directory or args.csv_mode:
+        if args.csv_directory:
+            csv_dir = args.csv_directory
+        else:
+            # Look for CSV files in default location
+            csv_dir = os.path.join(os.path.dirname(__file__), 'csv_data')
+            if not os.path.exists(csv_dir):
+                raise ValueError("CSV mode enabled but no CSV directory found. Use --csv_directory to specify path.")
+        
+        print(f"Creating AUV environment in CSV mode using data from: {csv_dir}")
+        env = AUVEnv(csv_directory=csv_dir)  # Pass CSV directory to enable CSV mode
+        training_mode = "CSV"
+        
+    else:
+        print("Creating AUV environment in online ROS2 mode...")
+        env = AUVEnv()  # No CSV directory = online mode
+        training_mode = "Online ROS2"
+    
+    print(f"Environment created successfully in {training_mode} mode!")
 
-    # Display setpoint configuration
-    setpoint_config = config.get('setpoint', {})
-    print(f"\nSetpoint Configuration:")
-    print(f"  Depth range: {setpoint_config.get('pos_z_range', [1.0, 8.0])} m")
-    print(f"  Yaw range: {setpoint_config.get('ori_z_range', [-2.14, 2.14])} rad")
-    print(f"  Pitch range: {setpoint_config.get('ori_y_range', [-0.1, 0.1])} rad")
-    print(f"  Surge velocity range: {setpoint_config.get('vel_x_range', [-0.6, 0.6])} m/s")
-    print("Setpoints will change at the beginning of each episode.")
+    # Display configuration based on mode
+    if args.csv_directory or args.csv_mode:
+        print(f"\nCSV Training Configuration:")
+        print(f"  CSV Directory: {csv_dir}")
+        if hasattr(env, 'csv_manager'):
+            stats = env.csv_manager.get_dataset_stats()
+            print(f"  Total timesteps available: {stats.get('total_timesteps', 'Unknown')}")
+            print(f"  Duration: {stats.get('duration_seconds', 0):.1f} seconds")
+            print(f"  Potential episodes (500 steps): {stats.get('potential_episodes_500_steps', 0)}")
+        print(f"  Training will cycle through available CSV data segments.")
+    else:
+        # Display setpoint configuration for online mode
+        setpoint_config = config.get('setpoint', {})
+        print(f"\nOnline Setpoint Configuration:")
+        print(f"  Depth range: {setpoint_config.get('pos_z_range', [1.0, 8.0])} m")
+        print(f"  Yaw range: {setpoint_config.get('ori_z_range', [-2.14, 2.14])} rad")
+        print(f"  Pitch range: {setpoint_config.get('ori_y_range', [-0.1, 0.1])} rad")
+        print(f"  Surge velocity range: {setpoint_config.get('vel_x_range', [-0.6, 0.6])} m/s")
+        print("Setpoints will change at the beginning of each episode.")
 
     # Set up logging directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -537,7 +655,8 @@ def main():
         log_dir_base_name = os.path.splitext(os.path.basename(args.resume_from_checkpoint))[0]
         log_dir = os.path.join("logs", f"sac_resumed_{log_dir_base_name}_{timestamp}")
     else:
-        log_dir = os.path.join("logs", f"sac_episodic_setpoints_warmup_{timestamp}")
+        mode_suffix = "csv" if (args.csv_directory or args.csv_mode) else "online"
+        log_dir = os.path.join("logs", f"sac_{mode_suffix}_warmup_{timestamp}")
     os.makedirs(log_dir, exist_ok=True)
     print(f"Logging to: {log_dir}")
 
@@ -556,8 +675,8 @@ def main():
         if args.learning_starts:
             learning_starts = args.learning_starts
         else:
-            # Use config value if available, otherwise use a reasonable default based on buffer size
-            learning_starts = config['agent'].get('learning_starts', max(1000, batch_size * 4))
+            # Use config value if available, otherwise use a reasonable default
+            learning_starts = config['agent'].get('learning_starts', min(1000, batch_size * 4))
         
         policy_kwargs = {
             "net_arch": config['qnetwork']['actor_hidden_layers'],
@@ -572,10 +691,10 @@ def main():
             )
             print(f"Model loaded. Current timesteps: {model.num_timesteps}")
             print(f"Warmup period: {model.learning_starts} steps")
-            print(f"Training will continue with episode-based setpoint changes.")
+            print(f"Training will continue in {training_mode} mode.")
 
         else:
-            print("Starting new training session with episode-based setpoint changes and warmup period.")
+            print(f"Starting new training session in {training_mode} mode with warmup period.")
             model = SAC(
                 "MlpPolicy",
                 env,
@@ -601,15 +720,15 @@ def main():
         new_logger = configure(log_dir, ["stdout", "csv", "tensorboard"])
         model.set_logger(new_logger)
 
-        # Set up callbacks
+        # Set up callbacks - same for both modes
         max_episode_steps = config['training']['max_t']
         checkpoint_callback = CheckpointCallback(
             save_freq=max(config['training']['save_freq_timesteps'], max_episode_steps),
             save_path=os.path.join(log_dir, "checkpoints"),
-            name_prefix="sac_auv_episodic_setpoints_warmup"
+            name_prefix=f"sac_auv_{training_mode.lower().replace(' ', '_')}_warmup"
         )
 
-        # Use enhanced plotting callback
+        # Use enhanced plotting callback (now handles both modes)
         plot_callback = EnhancedRewardPlottingCallback(
             plot_interval=config['plotting']['plot_interval'],
             verbose=1
@@ -635,11 +754,17 @@ def main():
             print(f"Model already trained for {model.num_timesteps} timesteps. Target total_timesteps {total_timesteps} already met or exceeded.")
             print("If you want to train further, increase --timesteps or config['training']['max_episodes'].")
         else:
-            print(f"Starting SAC training with episode-based setpoints and warmup period.")
+            print(f"Starting SAC training in {training_mode} mode with warmup period.")
             print(f"Current timesteps: {model.num_timesteps}. Target timesteps: {total_timesteps}. Remaining: {remaining_timesteps}")
             print(f"Warmup period: {model.learning_starts} steps (training starts after this)")
             print(f"Gradient monitoring interval: {args.gradient_monitor_interval} steps")
-            print(f"Each episode will have a new random setpoint generated at reset.")
+            
+            if args.csv_directory or args.csv_mode:
+                if hasattr(env, 'csv_manager'):
+                    stats = env.csv_manager.get_dataset_stats()
+                    print(f"Training will use {stats.get('total_timesteps', 0)} timesteps of CSV data.")
+            else:
+                print(f"Each episode will have a new random setpoint generated at reset.")
             
             # Display warmup strategy
             if model.num_timesteps < model.learning_starts:
@@ -664,14 +789,21 @@ def main():
 
                 # Print final summaries
                 print(f"\n--- Final Training Summary ---")
+                print(f"Training mode: {training_mode}")
                 print(f"Total episodes completed: {plot_callback.episode_count}")
                 print(f"  - Warmup episodes: {plot_callback.warmup_episodes}")
                 print(f"  - Training episodes: {plot_callback.training_episodes}")
-                print(f"Setpoint diversity achieved: {len(plot_callback.setpoint_history)} unique setpoints")
                 
-                if plot_callback.setpoint_history:
-                    print(f"Depth range explored: {min(sp['pos_z'] for sp in plot_callback.setpoint_history):.2f} to {max(sp['pos_z'] for sp in plot_callback.setpoint_history):.2f} m")
-                    print(f"Yaw range explored: {min(sp['ori_z'] for sp in plot_callback.setpoint_history):.2f} to {max(sp['ori_z'] for sp in plot_callback.setpoint_history):.2f} rad")
+                if args.csv_directory or args.csv_mode:
+                    print(f"CSV episodes completed: {len(plot_callback.csv_episode_info)}")
+                    if plot_callback.csv_episode_info:
+                        start_times = [info['start_timestamp'] for info in plot_callback.csv_episode_info]
+                        print(f"CSV data range used: {min(start_times):.1f}s to {max(start_times):.1f}s")
+                else:
+                    print(f"Setpoint diversity achieved: {len(plot_callback.setpoint_history)} unique setpoints")
+                    if plot_callback.setpoint_history:
+                        print(f"Depth range explored: {min(sp['pos_z'] for sp in plot_callback.setpoint_history):.2f} to {max(sp['pos_z'] for sp in plot_callback.setpoint_history):.2f} m")
+                        print(f"Yaw range explored: {min(sp['ori_z'] for sp in plot_callback.setpoint_history):.2f} to {max(sp['ori_z'] for sp in plot_callback.setpoint_history):.2f} rad")
 
                 print(f"\n--- Final Gradient Monitoring Summary ---")
                 print("Total Updates by Network (Training Phase Only):")
@@ -688,6 +820,7 @@ def main():
                 print(f"Interrupted model saved to {interrupted_model_path}. Total timesteps: {model.num_timesteps}")
 
     elif args.mode == 'test':
+        # Testing mode - works for both CSV and online modes
         if args.model is None:
             if args.resume_from_checkpoint:
                 potential_log_dir = os.path.dirname(os.path.dirname(args.resume_from_checkpoint))
@@ -709,12 +842,12 @@ def main():
         model = SAC.load(model_path_to_test, env=env) 
 
         # Test the model
-        print("Starting evaluation with episode-based setpoint changes...")
+        print(f"Starting evaluation in {training_mode} mode...")
         max_episode_steps = config['training']['max_t']
         test_episodes = config['evaluation']['num_episodes']
         episode_rewards = []
         episode_lengths = []
-        episode_setpoints = []
+        episode_info_list = []
 
         for episode in range(test_episodes):
             obs, info = env.reset()
@@ -723,9 +856,9 @@ def main():
             truncated = False
             step = 0
             
-            # Store setpoint info for this episode
-            episode_setpoints.append(info.get('setpoint_info', 'No setpoint info'))
-            print(f"Episode {episode+1}/{test_episodes}: {info.get('setpoint_info', 'No setpoint info')}")
+            # Store episode info
+            episode_info_list.append(info.get('setpoint_info', 'No info available'))
+            print(f"Episode {episode+1}/{test_episodes}: {info.get('setpoint_info', 'No info available')}")
 
             while not (terminated or truncated):
                 action, _ = model.predict(obs, deterministic=True)
@@ -745,14 +878,14 @@ def main():
             episode_lengths.append(step)
             print(f"  Episode {episode+1} completed. Reward: {episode_reward:.4f}, Length: {step}")
 
-        # Enhanced evaluation plotting
+        # Enhanced evaluation plotting - now mode-aware
         fig, axes = plt.subplots(2, 2, figsize=(15, 10))
         
         # Episode rewards
         axes[0, 0].bar(range(1, test_episodes+1), episode_rewards)
         axes[0, 0].set_xlabel('Episode')
         axes[0, 0].set_ylabel('Total Reward')
-        axes[0, 0].set_title(f'Evaluation Results ({os.path.basename(model_path_to_test)})')
+        axes[0, 0].set_title(f'Evaluation Results - {training_mode} Mode ({os.path.basename(model_path_to_test)})')
         axes[0, 0].grid(True, axis='y')
         
         # Episode lengths
@@ -771,47 +904,68 @@ def main():
         
         # Summary statistics
         axes[1, 1].axis('off')
+        mode_specific_text = ""
+        if args.csv_directory or args.csv_mode:
+            mode_specific_text = f"CSV Mode: Real AUV data\nData-driven evaluation"
+        else:
+            mode_specific_text = "Online Mode: Random setpoints\nLive ROS2 evaluation"
+            
         stats_text = f"""Evaluation Summary:
 Episodes: {test_episodes}
+Mode: {training_mode}
 Avg Reward: {np.mean(episode_rewards):.2f} ± {np.std(episode_rewards):.2f}
 Avg Length: {np.mean(episode_lengths):.1f} ± {np.std(episode_lengths):.1f}
 Best Reward: {max(episode_rewards):.2f}
 Worst Reward: {min(episode_rewards):.2f}
 
-Setpoint Diversity:
-Each episode had a unique setpoint
-Testing across varied conditions
+{mode_specific_text}
 Model trained with warmup period"""
         axes[1, 1].text(0.1, 0.9, stats_text, transform=axes[1, 1].transAxes, 
                         fontsize=12, verticalalignment='top', fontfamily='monospace')
         
         plt.tight_layout()
-        eval_plot_path = os.path.join(log_dir, "evaluation_results_enhanced.png")
+        mode_suffix = "csv" if (args.csv_directory or args.csv_mode) else "online"
+        eval_plot_path = os.path.join(log_dir, f"evaluation_results_{mode_suffix}.png")
         plt.savefig(eval_plot_path, dpi=150, bbox_inches='tight')
         print(f"Enhanced evaluation plot saved to {eval_plot_path}")
         plt.close()
 
         # Save detailed evaluation report
-        eval_report_path = os.path.join(log_dir, "evaluation_report.txt")
+        eval_report_path = os.path.join(log_dir, f"evaluation_report_{mode_suffix}.txt")
         with open(eval_report_path, 'w') as f:
-            f.write(f"Evaluation Report\n")
+            f.write(f"Evaluation Report - {training_mode} Mode\n")
             f.write("=" * 50 + "\n\n")
             f.write(f"Model: {os.path.basename(model_path_to_test)}\n")
+            f.write(f"Training Mode: {training_mode}\n")
             f.write(f"Episodes: {test_episodes}\n")
             f.write(f"Average Reward: {np.mean(episode_rewards):.4f} ± {np.std(episode_rewards):.4f}\n")
             f.write(f"Average Length: {np.mean(episode_lengths):.2f} ± {np.std(episode_lengths):.2f}\n\n")
             
+            if args.csv_directory or args.csv_mode:
+                f.write(f"CSV Directory: {csv_dir}\n")
+                if hasattr(env, 'csv_manager'):
+                    stats = env.csv_manager.get_dataset_stats()
+                    f.write(f"Dataset Duration: {stats.get('duration_seconds', 0):.1f}s\n")
+                    f.write(f"Dataset Timesteps: {stats.get('total_timesteps', 0)}\n\n")
+            
             f.write("Episode Details:\n")
-            for i, (reward, length, setpoint) in enumerate(zip(episode_rewards, episode_lengths, episode_setpoints)):
-                f.write(f"Episode {i+1}: Reward={reward:.4f}, Length={length}, {setpoint}\n")
+            for i, (reward, length, info) in enumerate(zip(episode_rewards, episode_lengths, episode_info_list)):
+                f.write(f"Episode {i+1}: Reward={reward:.4f}, Length={length}, {info}\n")
 
         print(f"\nEvaluation Summary:")
+        print(f"Mode: {training_mode}")
         print(f"Number of episodes: {test_episodes}")
         print(f"Average Reward: {np.mean(episode_rewards):.4f} ± {np.std(episode_rewards):.4f}")
         print(f"Average Length: {np.mean(episode_lengths):.2f} ± {np.std(episode_lengths):.2f}")
-        print(f"Each episode tested with a different random setpoint")
+        if args.csv_directory or args.csv_mode:
+            print(f"Evaluated using real AUV data from CSV files")
+        else:
+            print(f"Each episode tested with a different random setpoint")
         print(f"Model was trained with proper warmup period")
         print(f"Detailed report saved to: {eval_report_path}")
+
+    # Clean up
+    env.close()
 
 if __name__ == "__main__":
     main()

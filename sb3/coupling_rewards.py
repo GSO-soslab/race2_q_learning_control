@@ -272,7 +272,7 @@ class CouplingAwareRewardCalculator:
         try:
             # Extract errors with safe indexing
             depth_error = float(state_error_array[0])
-            surge_error = 10.0 * float(state_error_array[1]) # to scaLe surge up compared to other guys
+            surge_error = float(state_error_array[1]) # to scaLe surge up compared to other guys
             
             pitch_sin_err, pitch_cos_err = float(state_error_array[6]), float(state_error_array[7])
             yaw_sin_err, yaw_cos_err = float(state_error_array[8]), float(state_error_array[9])
@@ -310,31 +310,34 @@ class CouplingAwareRewardCalculator:
             # Individual error energies with enhanced weights for problem areas
             individual_energy = 0.5 * (
                 depth_error**2 + 
-                surge_error**2 + 
+                1* ((np.exp( surge_error))**2) + 
                 2.0 * pitch_error_mag**2 +  # ENHANCED: 2x weight for pitch
                 1.5 * yaw_error_mag**2       # ENHANCED: 1.5x weight for yaw offset
             )
-            print("Surge Error", surge_error**2)
+
             # ENHANCED: Asymmetric surge penalty
             surge_asymmetry_penalty = 0
-            if len(self.error_history) > 5:
-                recent_surges = [h['surge'] for h in self.error_history[-5:]]
-                positive_surges = [abs(s) for s in recent_surges if s > 0.1]
-                negative_surges = [abs(s) for s in recent_surges if s < -0.1]
+            # if len(self.error_history) > 5:
+            #     recent_surges = [h['surge'] for h in self.error_history[-5:]]
+            #     positive_surges = [abs(s) for s in recent_surges if s > 0.1]
+            #     negative_surges = [abs(s) for s in recent_surges if s < -0.1]
                 
-                if len(positive_surges) > 0 and len(negative_surges) > 0:
-                    positive_response = np.mean(positive_surges)
-                    negative_response = np.mean(negative_surges)
-                    asymmetry = abs(positive_response - negative_response) / max(positive_response, negative_response)
-                    surge_asymmetry_penalty = 0.1 * asymmetry
+            #     if len(positive_surges) > 0 and len(negative_surges) > 0:
+            #         positive_response = np.mean(positive_surges)
+            #         negative_response = np.mean(negative_surges)
+            #         asymmetry = abs(positive_response - negative_response) / max(positive_response, negative_response)
+            #         surge_asymmetry_penalty = 0.1 * asymmetry
             
             surge_progress_bonus = 0
             if len(self.error_history) > 2:
                 current_surge_error = abs(self.error_history[-1]['surge'])
                 prev_surge_error = abs(self.error_history[-2]['surge'])
                 if prev_surge_error > current_surge_error:  # Improvement
-                    surge_progress_bonus = 0.1 * (prev_surge_error - current_surge_error)
+                    surge_progress_bonus = 10 * (prev_surge_error - current_surge_error)
+                else:
+                    surge_progress_bonus = - 10 * (prev_surge_error - current_surge_error)
 
+            print("Surge bonus",surge_progress_bonus)
             # ENHANCED: Yaw bias penalty
             yaw_bias_penalty = 0
             if len(self.error_history) > 10:
@@ -349,7 +352,7 @@ class CouplingAwareRewardCalculator:
                 prev_errors = self.error_history[-2]
                 
                 # Velocity calculations
-                velocity_surge = surge_error - prev_errors['surge']
+                velocity_surge = 10 * (surge_error - prev_errors['surge'])
                 velocity_yaw = yaw_error_mag - prev_errors['yaw']
                 velocity_pitch = pitch_error_mag - prev_errors['pitch']
                 velocity_depth = depth_error - prev_errors['depth']
@@ -366,12 +369,12 @@ class CouplingAwareRewardCalculator:
                     velocity_depth**2
                 )
             
-            print("individual_energy:", individual_energy)
-            print("surge_yaw_spring_energy:", surge_yaw_spring_energy)
-            print("pitch_depth_spring_energy:", pitch_depth_spring_energy)
-            print("damping_energy:", damping_energy)
-            print("surge_asymmetry_penalty:", surge_asymmetry_penalty)
-            print("yaw_bias_penalty:", yaw_bias_penalty)
+            # print("individual_energy:", individual_energy)
+            # print("surge_yaw_spring_energy:", surge_yaw_spring_energy)
+            # print("pitch_depth_spring_energy:", pitch_depth_spring_energy)
+            # print("damping_energy:", damping_energy)
+            # print("surge_asymmetry_penalty:", surge_asymmetry_penalty)
+            # print("yaw_bias_penalty:", yaw_bias_penalty)
 
             # Total enhanced energy
             total_energy = (individual_energy + 
@@ -380,20 +383,21 @@ class CouplingAwareRewardCalculator:
                         damping_energy +
                         surge_asymmetry_penalty +
                         yaw_bias_penalty)
-            print("total_energy:", yaw_bias_penalty)
+            # print("total_energy:", total_energy)
             # ENHANCED: Adaptive energy scaling
-            # Scale energy penalty based on learning progress
-            if episode_num < 1000:
-                energy_scale = 0.5  # Gentler penalty during early learning
-            elif episode_num < 5000:
-                energy_scale = 0.8  # Medium penalty during intermediate learning
-            else:
-                energy_scale = 1.0  # Full penalty for mature learning
+            # # Scale energy penalty based on learning progress
+            # if episode_num < 1000:
+            #     energy_scale = 0.5  # Gentler penalty during early learning
+            # elif episode_num < 5000:
+            #     energy_scale = 0.8  # Medium penalty during intermediate learning
+            # else:
+            #     energy_scale = 1.0  # Full penalty for mature learning
             
             # Return negative scaled energy
             # return float(-total_energy * energy_scale)
-
-            return float(-total_energy * energy_scale + surge_progress_bonus)
+            # return float(-total_energy * energy_scale + surge_progress_bonus)
+            print("Total energy guy" , float(-total_energy) + surge_progress_bonus)
+            return float(-total_energy) + surge_progress_bonus
         
         except Exception as e:
             print(f"Error in v4_enhanced calculation: {e}")

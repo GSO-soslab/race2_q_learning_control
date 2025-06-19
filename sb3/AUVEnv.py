@@ -14,7 +14,7 @@ import random
 
 # Import the coupling reward calculator
 from coupling_rewards import CouplingAwareRewardCalculator
-
+from csv_data_manager import CSVDataManager
 class SetpointManager:
     """Manages setpoint generation for episode-based training"""
     
@@ -136,6 +136,8 @@ class AUVEnvNode(Node):
             10
         )
         
+        self.smoothed_surge_pub = self.create_publisher(Float64, '/race2/smoothed_surge_velocity', 1)
+
         # Create timer for continuous setpoint publishing
         self.setpoint_publish_rate = 5.0  # 5 Hz
         self.setpoint_timer = self.create_timer(
@@ -238,6 +240,17 @@ class AUVEnvNode(Node):
         self.v_err = np.array([data.velocity.x, data.velocity.y, data.velocity.z])
         self.omega_ref_err = np.array([data.angular_rate.x, data.angular_rate.y, data.angular_rate.z])
         
+        # Smooth surge velocity error (v_err[0])
+        if not hasattr(self, 'surge_error_filter'):
+            self.surge_error_filter = self.v_err[0]  # Initialize on first call
+        
+        alpha = 0.65  # Smoothing factor
+        self.surge_error_filter = alpha * self.surge_error_filter + (1 - alpha) * self.v_err[0]
+        
+        # Use smoothed surge error
+        smoothed_v_err = self.v_err.copy()
+        smoothed_v_err[0] = self.surge_error_filter
+        
         # Convert orientation errors to sin/cos representation to avoid angle wrapping issues
         roll_sin_err = np.sin(self.orientation_err[0])
         roll_cos_err = np.cos(self.orientation_err[0])
@@ -246,10 +259,10 @@ class AUVEnvNode(Node):
         yaw_sin_err = np.sin(self.orientation_err[2])
         yaw_cos_err = np.cos(self.orientation_err[2])
         
-        # Update the state error array with the new representation
+        # Update the state error array with the smoothed surge error
         self.state_err = np.concatenate([
             self.position_err[2:3],
-            self.v_err[:2],
+            smoothed_v_err[:2],  # Using smoothed surge error here
             np.array([roll_sin_err, roll_cos_err, pitch_sin_err, pitch_cos_err, yaw_sin_err, yaw_cos_err]),
             self.omega_ref_err[:3],
         ])
@@ -262,12 +275,28 @@ class AUVEnvNode(Node):
         self.get_logger().debug("State callback triggered!")
         # Add timestamp to the state observation
         self.last_state_timestamp = time.time()
-        
         # Extract state values
         self.position_state = np.array([data.position.x, data.position.y, data.position.z])
         self.orientation_state = np.array([data.orientation.x, data.orientation.y, data.orientation.z])
         self.v_state = np.array([data.velocity.x, data.velocity.y, data.velocity.z])
         self.omega_ref_state = np.array([data.angular_rate.x, data.angular_rate.y, data.angular_rate.z])
+        
+        # Smooth surge velocity state (v_state[0])
+        if not hasattr(self, 'surge_state_filter'):
+            self.surge_state_filter = self.v_state[0]  # Initialize on first call
+        
+        alpha = 0.65  # Same smoothing factor as error callback
+        self.surge_state_filter = alpha * self.surge_state_filter + (1 - alpha) * self.v_state[0]
+        
+        # Use smoothed surge state
+        smoothed_v_state = self.v_state.copy()
+        smoothed_v_state[0] = self.surge_state_filter
+        
+        # Publish smoothed surge velocity
+        from std_msgs.msg import Float64
+        surge_msg = Float64()
+        surge_msg.data = float(self.surge_state_filter)
+        self.smoothed_surge_pub.publish(surge_msg)
         
         # Convert orientation to sin/cos representation to avoid angle wrapping issues
         roll_sin = np.sin(self.orientation_state[0])
@@ -277,10 +306,10 @@ class AUVEnvNode(Node):
         yaw_sin = np.sin(self.orientation_state[2])
         yaw_cos = np.cos(self.orientation_state[2])
         
-        # Update current state for RL agent with sin/cos representation
+        # Update current state for RL agent with smoothed surge velocity
         self.current_state = np.concatenate([
             self.position_state[2:3],
-            self.v_state[:2],
+            smoothed_v_state[:2],  # Using smoothed surge velocity here
             np.array([roll_sin, roll_cos, pitch_sin, pitch_cos, yaw_sin, yaw_cos]),
         ])
         
@@ -394,7 +423,8 @@ class AUVEnvNode(Node):
 class AUVEnv(gym.Env):
     """Custom AUV Environment that follows gym interface"""
     
-    def __init__(self):
+    # def __init__(self):
+    def __init__(self, csv_directory=None):
         super(AUVEnv, self).__init__()
         
         # Load configuration
@@ -406,8 +436,21 @@ class AUVEnv(gym.Env):
         if not rclpy.ok():
             rclpy.init(args=None)
         
-        # Create ROS2 node
-        self.node = AUVEnvNode(self.config)
+        self.csv_mode = csv_directory is not None
+        
+        if self.csv_mode:
+            print("Initializing AUVEnv in CSV mode...")
+            self.csv_manager = CSVDataManager(csv_directory, self.config)
+            self.node = None  # No ROS2 node needed
+        else:
+            print("Initializing AUVEnv in online ROS2 mode...")
+            # Initialize ROS2 if not already done
+            if not rclpy.ok():
+                rclpy.init(args=None)
+            
+            # Create ROS2 node
+            self.node = AUVEnvNode(self.config)
+            self.csv_manager = None
         
         # Set up action and observation spaces
         thruster_size = self.config['environment']['thruster_size']
@@ -456,111 +499,197 @@ class AUVEnv(gym.Env):
         """Reset the environment to initial state and return the initial observation"""
         if seed is not None:
             np.random.seed(seed)
-            random.seed(seed)  # Also seed the random module for setpoint generation
+            random.seed(seed)
         
         self.episode_step = 0
         self.episode_reward = 0
         self.episode_count += 1
         
-        # Generate and publish a new setpoint for this episode
-        setpoint = self.node.publish_new_setpoint()
-        self.current_episode_setpoint_info = self.node.get_current_setpoint_info()
-        
-        print(f"Episode {self.episode_count} started - {self.current_episode_setpoint_info}")
-        
-        # Wait longer for the setpoint to propagate through the system
-        time.sleep(0.2)
-        self._spin_node(timeout_sec=0.3)
-        
-        # Publish the setpoint again to make sure it's received
-        setpoint = self.node.publish_new_setpoint()
-        time.sleep(0.1)
-        self._spin_node(timeout_sec=0.3)
+        if self.csv_mode:
+            # CSV mode: start new episode from synchronized data
+            episode_info = self.csv_manager.reset_episode(episode_length=500)
+            self.current_episode_setpoint_info = f"CSV Episode {self.episode_count} (start: {episode_info['start_timestamp']:.1f}s)"
+            print(f"Episode {self.episode_count} started - CSV data from {episode_info['start_timestamp']:.1f}s")
+            
+            # Get initial observation from CSV data
+            initial_observation = self.csv_manager._get_current_state_observation()
+            
+        else:
+            # Online mode: your existing reset logic
+            setpoint = self.node.publish_new_setpoint()
+            self.current_episode_setpoint_info = self.node.get_current_setpoint_info()
+            
+            print(f"Episode {self.episode_count} started - {self.current_episode_setpoint_info}")
+            
+            # Wait for setpoint to propagate
+            time.sleep(0.05)
+            self._spin_node(timeout_sec=0.3)
+            
+            # Publish the setpoint again
+            setpoint = self.node.publish_new_setpoint()
+            time.sleep(0.01)
+            self._spin_node(timeout_sec=0.3)
+            
+            # Your existing observation building logic...
+            depth = self.node.position_state[2:3]
+            surge = self.node.v_state[0:1]
+            sway = self.node.v_state[1:2]
+            heave = self.node.v_state[2:3]
+            
+            roll = self.node.orientation_state[0]
+            pitch = self.node.orientation_state[1]
+            yaw = self.node.orientation_state[2]
+            
+            roll_sin = np.sin(roll)
+            roll_cos = np.cos(roll)
+            pitch_sin = np.sin(pitch)
+            pitch_cos = np.cos(pitch)
+            yaw_sin = np.sin(yaw)
+            yaw_cos = np.cos(yaw)
+            
+            depth_error = self.node.position_err[2:3]
+            surge_error = self.node.v_err[0:1]
+            sway_error = self.node.v_err[1:2]
+            heave_error = self.node.v_err[2:3]
+            
+            roll_error = self.node.orientation_err[0]
+            pitch_error = self.node.orientation_err[1]
+            yaw_error = self.node.orientation_err[2]
+            
+            roll_sin_error = np.sin(roll_error)
+            roll_cos_error = np.cos(roll_error)
+            pitch_sin_error = np.sin(pitch_error)
+            pitch_cos_error = np.cos(pitch_error)
+            yaw_sin_error = np.sin(yaw_error)
+            yaw_cos_error = np.cos(yaw_error)
+            
+            initial_observation = np.concatenate([
+                depth_error,
+                surge_error,
+                sway_error,
+                np.array([roll_sin_error]),
+                np.array([roll_cos_error]),
+                np.array([pitch_sin_error]),
+                np.array([pitch_cos_error]),
+                np.array([yaw_sin_error]),
+                np.array([yaw_cos_error]),
+                surge,
+                sway,
+                heave,
+                self.node.omega_ref_state[0:1],
+                self.node.omega_ref_state[1:2],
+                self.node.omega_ref_state[2:3],
+                self.node.linear_acceleration[0:1],
+                self.node.linear_acceleration[1:2]
+            ])
 
         # Initialize coupling calculator if not done yet
         if self.coupling_calculator is None:
+            from coupling_rewards import CouplingAwareRewardCalculator
             self.coupling_calculator = CouplingAwareRewardCalculator(self.config)
-        
-        zero_thruster_cmds = np.zeros(self.num_thrusters)  
-        zero_servo_angles_rad = np.zeros(self.num_servos)  
-        zero_action = np.zeros(self.num_thrusters + self.num_servos)  
-        
-        # Extract state variables with sin/cos representation for angles
-        depth = self.node.position_state[2:3]
-        surge = self.node.v_state[0:1]     
-        sway = self.node.v_state[1:2]      
-        heave = self.node.v_state[2:3]
-        
-        # Convert Euler angles to sin/cos representation
-        roll = self.node.orientation_state[0]
-        pitch = self.node.orientation_state[1]
-        yaw = self.node.orientation_state[2]
-        
-        roll_sin = np.sin(roll)
-        roll_cos = np.cos(roll)
-        pitch_sin = np.sin(pitch)
-        pitch_cos = np.cos(pitch)
-        yaw_sin = np.sin(yaw)
-        yaw_cos = np.cos(yaw)
-
-        # Extract error variables with sin/cos representation for angle errors
-        depth_error = self.node.position_err[2:3]        
-        surge_error = self.node.v_err[0:1]   
-        sway_error = self.node.v_err[1:2]       
-        heave_error = self.node.v_err[2:3]
-        
-        roll_error = self.node.orientation_err[0]
-        pitch_error = self.node.orientation_err[1]
-        yaw_error = self.node.orientation_err[2]
-        
-        roll_sin_error = np.sin(roll_error)
-        roll_cos_error = np.cos(roll_error)
-        pitch_sin_error = np.sin(pitch_error)
-        pitch_cos_error = np.cos(pitch_error)
-        yaw_sin_error = np.sin(yaw_error)
-        yaw_cos_error = np.cos(yaw_error)
-
-        # Create initial observation with sin/cos representation + velocities + angular rates
-        initial_observation = np.concatenate([
-            # Error components (10 elements)
-            depth_error,                    # [0]
-            surge_error,                    # [1] 
-            sway_error,                     # [2]
-            np.array([roll_sin_error]),     # [3]
-            np.array([roll_cos_error]),     # [4]
-            np.array([pitch_sin_error]),    # [5]
-            np.array([pitch_cos_error]),    # [6]
-            np.array([yaw_sin_error]),      # [7]
-            np.array([yaw_cos_error]),      # [8]
-            # heave_error,                    # [9]
-            
-            # Velocity components (3 elements)
-            surge,                          # [10] - surge velocity
-            sway,                           # [11] - sway velocity  
-            heave,                          # [12] - heave velocity
-            
-            # Angular rate components (3 elements)
-            self.node.omega_ref_state[0:1], # [13] - roll rate
-            self.node.omega_ref_state[1:2], # [14] - pitch rate
-            self.node.omega_ref_state[2:3],  # [15] - yaw rate
-
-            self.node.linear_acceleration[0:1], # [15] - x acceleration
-            self.node.linear_acceleration[1:2]  # [16] - y acceleration
-        ])
 
         info = {
             'episode_count': self.episode_count,
             'setpoint_info': self.current_episode_setpoint_info,
-            'setpoint_values': {
+            'mode': 'csv' if self.csv_mode else 'online'
+        }
+        
+        if self.csv_mode:
+            info['csv_episode_info'] = episode_info
+            stats = self.csv_manager.get_dataset_stats()
+            info['dataset_stats'] = stats
+        else:
+            info['setpoint_values'] = {
                 'pos_z': setpoint.position.z,
                 'ori_z': setpoint.orientation.z,
                 'ori_y': setpoint.orientation.y,
                 'vel_x': setpoint.velocity.x
             }
-        }
+        
         return initial_observation, info
-    
+
     def step(self, action):
+        """Execute action in the environment and return next state, reward, termination flag, etc."""
+        
+        if self.csv_mode:
+            return self._step_csv_mode(action)
+        else:
+            return self._step_online_mode(action)
+
+    def _step_csv_mode(self, action):
+        """Handle step in CSV mode"""
+        # Advance episode (10Hz = 0.1s per step)
+        episode_done, step_info = self.csv_manager.step_episode()  # FIXED: was step_trajectory
+        
+        # Get current observation from CSV data
+        observation = self.csv_manager._get_current_state_observation()
+        
+        # Get state error array for reward calculation
+        state_error_array = self.csv_manager.get_state_error_array()
+        
+        # Update tracking variables for reward calculation
+        # Extract thruster and servo commands from action
+        self.thruster_action = action[:4]
+        self.joint_angles = action[4:6] if len(action) > 4 else np.zeros(2)
+        self.last_action = action.copy()
+        
+        # Update thruster states for reward calculation (simulate thruster response)
+        # Note: In CSV mode, we use the agent's actions rather than recorded actions
+        if not hasattr(self, '_mock_node'):
+            self._mock_node = type('MockNode', (), {})()
+        
+        self._mock_node.thrust_heave_bow = action[0]
+        self._mock_node.thrust_heave_stern = action[1] 
+        self._mock_node.thrust_surge_port = action[2]
+        self._mock_node.thrust_surge_starboard = action[3]
+        
+        # Use mock node for reward calculation
+        original_node = self.node
+        self.node = self._mock_node
+        
+        # Calculate reward using existing logic
+        reward = self.calculate_reward(state_error_array)
+        if isinstance(reward, np.ndarray):
+            reward = float(reward.item())
+        
+        # Restore original node reference
+        self.node = original_node
+        
+        # Store raw reward
+        if not hasattr(self, 'episode_rewards'):
+            self.episode_rewards = []
+        self.episode_rewards.append(reward)
+        
+        self.episode_reward += reward
+        
+        # Check termination conditions
+        terminated = episode_done  # FIXED: was trajectory_done
+        truncated = False
+        
+        # CSV episodes can be limited by max_steps or data length
+        max_steps = getattr(self, 'max_steps', 500)
+        if self.episode_step >= max_steps:
+            truncated = True
+            
+        # Also terminate if we've run out of data
+        if step_info.get('reason') == 'data_complete':
+            terminated = True
+        
+        self.episode_step += 1
+        
+        info = {
+            'episode_step': self.episode_step,
+            'episode_reward': self.episode_reward, 
+            'setpoint_info': self.current_episode_setpoint_info,
+            'csv_step_info': step_info,
+            'simulation_time': step_info.get('timestamp', self.episode_step * 0.1),  # FIXED: use timestamp
+            'data_frequency': '10Hz (0.1s per step)',
+            'recorded_action': self.csv_manager.get_recorded_action_at_current_step()  # Added for analysis
+        }
+        
+        return observation, reward, terminated, truncated, info
+    
+    def _step_online_mode(self, action):
         """Execute action in the environment and return next state, reward, termination flag, etc."""
 
         state_error_array = None
@@ -608,12 +737,12 @@ class AUVEnv(gym.Env):
         self.last_action = action.copy()
         
         # Wait for callbacks to be processed
-        timeout_sec = 0.5
+        timeout_sec = 0.3
         start_time = time.time()
         
         # Process ROS events to handle callbacks
         while not (self.node.new_state_available and self.node.new_error_available):
-            self._spin_node(timeout_sec=0.48)
+            self._spin_node(timeout_sec=0.28)
             if time.time() - start_time > timeout_sec:
                 print("Warning: Timeout waiting for state/error updates")
                 break
@@ -926,16 +1055,19 @@ class AUVEnv(gym.Env):
             self.node.destroy_node()
 
 
-def main(args=None):
+def main(args=None, csv_directory=None):
     """
-    Main function to initialize ROS2 and make the environment available for external use.
-    This doesn't run any training itself - it's meant to be imported by a training script.
+    Main function to initialize and return the environment.
+    
+    Args:
+        args: ROS2 args (only used in online mode)
+        csv_directory: Path to CSV directory for offline training (optional)
     """
-
-    if not rclpy.ok():
+    
+    if csv_directory is None and not rclpy.ok():
         rclpy.init(args=args)
     
-    return AUVEnv()
+    return AUVEnv(csv_directory=csv_directory)
 
 
 if __name__ == "__main__":

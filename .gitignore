@@ -12,6 +12,7 @@ DDPG/src/checkpoints/*
 DDPG/checkpoints/*
 sb3/auv_venv
 sb3/results 
+sb3/data
 # Gradle
 .idea/**/gradle.xml
 .idea/**/libraries

@@ -12,7 +12,7 @@ setpoint:
   ori_y_range: [-0.1, 0.1]
   
   # Velocity X range (surge) - Forward/backward speed targets
-  vel_x_range: [-0.6, 0.6]
+  vel_x_range: [-0.25, 0.25]
 
 others:
   random_seed: 42
@@ -32,21 +32,21 @@ training:
 agent:
   learning_rate: 0.0003        # REDUCED - slower learning for stability
   buffer_size: 1000000
-  batch_size: 
+  batch_size: 16
   gamma: 0.99
   tau: 0.005
   ent_coef: auto            # REDUCED - less exploration, more exploitation
   target_update_interval: 1
   # replay_buffer_kwargs: # Optional arguments for the replay buffer
-  learning_starts: 500
+  learning_starts: 1000
 
 qnetwork:
-  actor_hidden_layers: [300, 256, 128]
+  actor_hidden_layers: [256, 128, 64]
   # critic_hidden_layers: [128, 128, 128]
 
 # Coupling-aware reward configuration - now supports all 4 methods
 coupling:
-  method: 'v4'  # Options: 'v1', 'v2', 'v3', 'v4', 'standard'
+  method: 'standard'  # Options: 'v1', 'v2', 'v3', 'v4', 'standard'
   
   # Base coupling strength parameters (used by all methods)
   surge_yaw_weight: 0.25      # REDUCED from 0.3 (less aggressive surge-yaw)
@@ -82,7 +82,7 @@ reward_function:
   
   # Individual state error weights (used in coupling calculations)
   state_error_weights: [
-    0.00002,   # z (depth) - INCREASED for better pitch-depth coupling
+    0.002,   # z (depth) - INCREASED for better pitch-depth coupling
     0.0005,  # surge - INCREASED to fix asymmetric response
     0.0001,  # sway
     0.0,     # heave
