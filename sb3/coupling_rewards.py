@@ -310,7 +310,7 @@ class CouplingAwareRewardCalculator:
             # Individual error energies with enhanced weights for problem areas
             individual_energy = 0.5 * (
                 depth_error**2 + 
-                1* ((np.exp( surge_error))**2) + 
+                ((np.exp( surge_error))**2) + 
                 2.0 * pitch_error_mag**2 +  # ENHANCED: 2x weight for pitch
                 1.5 * yaw_error_mag**2       # ENHANCED: 1.5x weight for yaw offset
             )
@@ -444,8 +444,8 @@ class CouplingAwareRewardCalculator:
     def _calculate_standard_reward(self, state_error_array):
         """Standard reward calculation for exploration phase"""
         original_weights = np.array(self.config['reward_function']['state_error_weights'])
-        state_error_weights = self._expand_weights_for_sincos(original_weights, state_error_array)
-        
+        # state_error_weights = self._expand_weights_for_sincos(original_weights, state_error_array)
+        state_error_weights = original_weights
         error_column = state_error_array.reshape(-1, 1)
         error_row = state_error_array.reshape(1, -1)
         weights_diag = np.diag(state_error_weights)

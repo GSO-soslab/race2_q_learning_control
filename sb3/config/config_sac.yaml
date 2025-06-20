@@ -25,23 +25,23 @@ environment:
   max_servo_angle_rad: 1.57 # 45 degrees in radians
 
 training:
-  max_episodes: 1000
+  max_episodes: 1500
   max_t: 200
   save_freq_timesteps: 10
 
 agent:
-  learning_rate: 0.0003        # REDUCED - slower learning for stability
-  buffer_size: 1000000
-  batch_size: 16
+  learning_rate: 0.0003        
+  buffer_size: 50000
+  batch_size: 32
   gamma: 0.99
   tau: 0.005
-  ent_coef: auto            # REDUCED - less exploration, more exploitation
+  ent_coef: auto           
   target_update_interval: 1
   # replay_buffer_kwargs: # Optional arguments for the replay buffer
-  learning_starts: 1000
+  learning_starts: 3000
 
 qnetwork:
-  actor_hidden_layers: [256, 128, 64]
+  actor_hidden_layers: [400, 300, 200]
   # critic_hidden_layers: [128, 128, 128]
 
 # Coupling-aware reward configuration - now supports all 4 methods
@@ -72,23 +72,23 @@ coupling:
 
 reward_function:
   w1: 0.8                     # REDUCED from 1.0 (less harsh energy penalty)
-  w2: 0.3
+  w2: 0.0
   w3: 0.0
-  w4: 0.4                     # INCREASED from 0.1 (more thruster smoothness)
+  w4: 0.08                     # thruster smoothness
   w5: 0.0
   w6: 0.0
-  w7: 0.2                     # INCREASED from 0.1 (more action smoothness)
-  w8: 0.1                     # ADDED - direction change penalty
+  w7: 0.0                    #more action smoothness
+  w8: 0.0                   # direction change penalty
   
   # Individual state error weights (used in coupling calculations)
   state_error_weights: [
-    0.002,   # z (depth) - INCREASED for better pitch-depth coupling
-    0.0005,  # surge - INCREASED to fix asymmetric response
-    0.0001,  # sway
+    0.5,   # z (depth) 0.2 was somehow ok
+    1.0,  # surge
+    0.0,  # sway
     0.0,     # heave
-    0.001,     # roll
-    0.001,   # pitch - INCREASED to reduce 0.3 rad error
-    0.00002   # yaw - INCREASED to fix offset issue
+    0.0,     # roll
+    0.1,   # pitch 
+    1.0   # yaw 
   ]
 
 action_penalties:

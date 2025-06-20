@@ -470,7 +470,7 @@ class AUVEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=-np.inf, 
             high=np.inf, 
-            shape=(17,),  # Updated size: 10 errors + 3 velocities + 3 angular rates
+            shape=(24,),  # Updated size: 10 errors + 3 velocities + 3 angular rates
             dtype=np.float32
         )
         
@@ -506,83 +506,89 @@ class AUVEnv(gym.Env):
         self.episode_count += 1
         
         if self.csv_mode:
-            # CSV mode: start new episode from synchronized data
             episode_info = self.csv_manager.reset_episode(episode_length=500)
             self.current_episode_setpoint_info = f"CSV Episode {self.episode_count} (start: {episode_info['start_timestamp']:.1f}s)"
             print(f"Episode {self.episode_count} started - CSV data from {episode_info['start_timestamp']:.1f}s")
             
-            # Get initial observation from CSV data
             initial_observation = self.csv_manager._get_current_state_observation()
             
         else:
-            # Online mode: 
             setpoint = self.node.publish_new_setpoint()
             self.current_episode_setpoint_info = self.node.get_current_setpoint_info()
             
             print(f"Episode {self.episode_count} started - {self.current_episode_setpoint_info}")
             
-            # Wait for setpoint to propagate
-            time.sleep(0.05)
-            self._spin_node(timeout_sec=0.3)
+            # time.sleep(0.05)
+            # self._spin_node(timeout_sec=0.3)
             
-            # Publish the setpoint again
+            # setpoint = self.node.publish_new_setpoint()
+            # time.sleep(0.01)
+            # self._spin_node(timeout_sec=0.3)
+            
+            time.sleep(0.1)           # Was: 0.05
+            self._spin_node(timeout_sec=0.1)    # Was: 0.3
+
             setpoint = self.node.publish_new_setpoint()
-            time.sleep(0.01)
-            self._spin_node(timeout_sec=0.3)
-            
+            time.sleep(0.05)          # Was: 0.01  
+            self._spin_node(timeout_sec=0.1)    # Was: 0.3
+
             depth = self.node.position_state[2:3]
-            surge = self.node.v_state[0:1]
-            sway = self.node.v_state[1:2]
-            heave = self.node.v_state[2:3]
-            
-            roll = self.node.orientation_state[0]
-            pitch = self.node.orientation_state[1]
-            yaw = self.node.orientation_state[2]
-            
-            roll_sin = np.sin(roll)
-            roll_cos = np.cos(roll)
-            pitch_sin = np.sin(pitch)
-            pitch_cos = np.cos(pitch)
-            yaw_sin = np.sin(yaw)
-            yaw_cos = np.cos(yaw)
-            
             depth_error = self.node.position_err[2:3]
-            surge_error = self.node.v_err[0:1]
-            sway_error = self.node.v_err[1:2]
-            heave_error = self.node.v_err[2:3]
+            surge_velocity_error = self.node.v_err[0:1]
+            sway_velocity_error = self.node.v_err[1:2]
             
-            roll_error = self.node.orientation_err[0]
-            pitch_error = self.node.orientation_err[1]
-            yaw_error = self.node.orientation_err[2]
+            roll_sin_err = np.array([np.sin(self.node.orientation_err[0])])
+            roll_cos_err = np.array([np.cos(self.node.orientation_err[0])])
+            pitch_sin_err = np.array([np.sin(self.node.orientation_err[1])])
+            pitch_cos_err = np.array([np.cos(self.node.orientation_err[1])])
+            yaw_sin_err = np.array([np.sin(self.node.orientation_err[2])])
+            yaw_cos_err = np.array([np.cos(self.node.orientation_err[2])])
             
-            roll_sin_error = np.sin(roll_error)
-            roll_cos_error = np.cos(roll_error)
-            pitch_sin_error = np.sin(pitch_error)
-            pitch_cos_error = np.cos(pitch_error)
-            yaw_sin_error = np.sin(yaw_error)
-            yaw_cos_error = np.cos(yaw_error)
+            roll_sin_current = np.array([np.sin(self.node.orientation_state[0])])
+            roll_cos_current = np.array([np.cos(self.node.orientation_state[0])])
+            pitch_sin_current = np.array([np.sin(self.node.orientation_state[1])])
+            pitch_cos_current = np.array([np.cos(self.node.orientation_state[1])])
+            yaw_sin_current = np.array([np.sin(self.node.orientation_state[2])])
+            yaw_cos_current = np.array([np.cos(self.node.orientation_state[2])])
+            
+            surge_velocity = self.node.v_state[0:1]
+            sway_velocity = self.node.v_state[1:2]
+            heave_velocity = self.node.v_state[2:3]
+            
+            roll_rate = self.node.omega_ref_state[0:1]
+            pitch_rate = self.node.omega_ref_state[1:2]
+            yaw_rate = self.node.omega_ref_state[2:3]
+            
+            x_acceleration = self.node.linear_acceleration[0:1]
+            y_acceleration = self.node.linear_acceleration[1:2]
             
             initial_observation = np.concatenate([
+                depth,
                 depth_error,
-                surge_error,
-                sway_error,
-                np.array([roll_sin_error]),
-                np.array([roll_cos_error]),
-                np.array([pitch_sin_error]),
-                np.array([pitch_cos_error]),
-                np.array([yaw_sin_error]),
-                np.array([yaw_cos_error]),
-                surge,
-                sway,
-                heave,
-                self.node.omega_ref_state[0:1],
-                self.node.omega_ref_state[1:2],
-                self.node.omega_ref_state[2:3],
-                self.node.linear_acceleration[0:1],
-                self.node.linear_acceleration[1:2]
+                surge_velocity_error,
+                sway_velocity_error,
+                roll_sin_err,
+                roll_cos_err,
+                pitch_sin_err,
+                pitch_cos_err,
+                yaw_sin_err,
+                yaw_cos_err,
+                roll_sin_current,
+                roll_cos_current,
+                pitch_sin_current,
+                pitch_cos_current,
+                yaw_sin_current,
+                yaw_cos_current,
+                surge_velocity,
+                sway_velocity,
+                heave_velocity,
+                roll_rate,
+                pitch_rate,
+                yaw_rate,
+                x_acceleration,
+                y_acceleration,
             ])
 
-        # Initialize coupling calculator if not done yet
         if self.coupling_calculator is None:
             from coupling_rewards import CouplingAwareRewardCalculator
             self.coupling_calculator = CouplingAwareRewardCalculator(self.config)
@@ -606,7 +612,7 @@ class AUVEnv(gym.Env):
             }
         
         return initial_observation, info
-
+    
     def step(self, action):
         """Execute action in the environment and return next state, reward, termination flag, etc."""
         
@@ -616,9 +622,10 @@ class AUVEnv(gym.Env):
             return self._step_online_mode(action)
 
     def _step_csv_mode(self, action):
-        """Handle step in CSV mode"""
-        # Advance episode (10Hz = 0.1s per step)
-        episode_done, step_info = self.csv_manager.step_episode()  # FIXED: was step_trajectory
+        """Handle step in CSV mode using recorded PID actions"""
+        
+        # Advance to next step in synchronized data
+        episode_done, step_info = self.csv_manager.step_episode()
         
         # Get current observation from CSV data
         observation = self.csv_manager._get_current_state_observation()
@@ -626,27 +633,28 @@ class AUVEnv(gym.Env):
         # Get state error array for reward calculation
         state_error_array = self.csv_manager.get_state_error_array()
         
-        # Update tracking variables for reward calculation
-        # Extract thruster and servo commands from action
-        self.thruster_action = action[:4]
-        self.joint_angles = action[4:6] if len(action) > 4 else np.zeros(2)
-        self.last_action = action.copy()
+        #Use recorded PID actions from CSV
+        recorded_pid_action = self.csv_manager.get_recorded_action_at_current_step()
         
-        # Update thruster states for reward calculation (simulate thruster response)
-        # Note: In CSV mode, we use the agent's actions rather than recorded actions
+        # Store recorded actions for reward calculation
+        self.thruster_action = recorded_pid_action[:4]  # PID thruster commands
+        self.joint_angles = recorded_pid_action[4:6] if len(recorded_pid_action) > 4 else np.zeros(2)  # PID servo commands
+        self.last_action = recorded_pid_action.copy()  # PID action, not agent action
+        
+        # Create mock node with recorded PID actions for reward calculation
         if not hasattr(self, '_mock_node'):
             self._mock_node = type('MockNode', (), {})()
         
-        self._mock_node.thrust_heave_bow = action[0]
-        self._mock_node.thrust_heave_stern = action[1] 
-        self._mock_node.thrust_surge_port = action[2]
-        self._mock_node.thrust_surge_starboard = action[3]
+        self._mock_node.thrust_heave_bow = recorded_pid_action[0]      # What PID actually did
+        self._mock_node.thrust_heave_stern = recorded_pid_action[1]    # What PID actually did
+        self._mock_node.thrust_surge_port = recorded_pid_action[2]     # What PID actually did
+        self._mock_node.thrust_surge_starboard = recorded_pid_action[3] # What PID actually did
         
         # Use mock node for reward calculation
         original_node = self.node
         self.node = self._mock_node
         
-        # Calculate reward
+        # Calculate reward based on PID's performance
         reward = self.calculate_reward(state_error_array)
         if isinstance(reward, np.ndarray):
             reward = float(reward.item())
@@ -662,15 +670,13 @@ class AUVEnv(gym.Env):
         self.episode_reward += reward
         
         # Check termination conditions
-        terminated = episode_done  # FIXED: was trajectory_done
+        terminated = episode_done
         truncated = False
         
-        # CSV episodes can be limited by max_steps or data length
         max_steps = getattr(self, 'max_steps', 500)
         if self.episode_step >= max_steps:
             truncated = True
             
-        # Also terminate if we've run out of data
         if step_info.get('reason') == 'data_complete':
             terminated = True
         
@@ -681,178 +687,134 @@ class AUVEnv(gym.Env):
             'episode_reward': self.episode_reward, 
             'setpoint_info': self.current_episode_setpoint_info,
             'csv_step_info': step_info,
-            'simulation_time': step_info.get('timestamp', self.episode_step * 0.1),  # FIXED: use timestamp
+            'simulation_time': step_info.get('timestamp', self.episode_step * 0.1),
             'data_frequency': '10Hz (0.1s per step)',
-            'recorded_action': self.csv_manager.get_recorded_action_at_current_step()  # Added for analysis
+            'recorded_action': recorded_pid_action,  # The PID action that was actually used
+            'agent_action': action  # The action the agent wanted to take (for comparison/analysis)
         }
         
         return observation, reward, terminated, truncated, info
+
     
     def _step_online_mode(self, action):
         """Execute action in the environment and return next state, reward, termination flag, etc."""
 
         state_error_array = None
 
-        # Get the current state BEFORE taking the action
-        current_depth_error = self.node.position_err[2:3].copy()
-        current_surge_error = self.node.v_err[0:1].copy()
-        current_sway_error = self.node.v_err[1:2].copy()
-        current_heave_error = self.node.v_err[2:3].copy()
-        
-        # Convert orientation errors to sin/cos
-        current_roll_error = self.node.orientation_err[0]
-        current_pitch_error = self.node.orientation_err[1]
-        current_yaw_error = self.node.orientation_err[2]
-        
-        current_roll_sin_error = np.sin(current_roll_error)
-        current_roll_cos_error = np.cos(current_roll_error)
-        current_pitch_sin_error = np.sin(current_pitch_error)
-        current_pitch_cos_error = np.cos(current_pitch_error)
-        current_yaw_sin_error = np.sin(current_yaw_error)
-        current_yaw_cos_error = np.cos(current_yaw_error)
-
-        current_depth = self.node.position_state[2:3].copy()
-        current_surge = self.node.v_state[0:1].copy()
-        current_sway = self.node.v_state[1:2].copy()
-        current_heave = self.node.v_state[2:3].copy()
-        
-        # Convert orientation to sin/cos
-        current_roll = self.node.orientation_state[0]
-        current_pitch = self.node.orientation_state[1]
-        current_yaw = self.node.orientation_state[2]
-        
-        current_roll_sin = np.sin(current_roll)
-        current_roll_cos = np.cos(current_roll)
-        current_pitch_sin = np.sin(current_pitch)
-        current_pitch_cos = np.cos(current_pitch)
-        current_yaw_sin = np.sin(current_yaw)
-        current_yaw_cos = np.cos(current_yaw)
-        
-        # Publish action to ROS
         thruster_cmds, servo_angles_rad = self.node.publish_action(action, self.num_thrusters, self.num_servos)
-        # Store for reward calculation
         self.thruster_action = thruster_cmds
         self.joint_angles = servo_angles_rad
         self.last_action = action.copy()
         
-        # Wait for callbacks to be processed
         timeout_sec = 0.3
         start_time = time.time()
         
-        # Process ROS events to handle callbacks
         while not (self.node.new_state_available and self.node.new_error_available):
             self._spin_node(timeout_sec=0.28)
             if time.time() - start_time > timeout_sec:
                 print("Warning: Timeout waiting for state/error updates")
                 break
                 
-        # Get updated state from the node
         if self.node.new_state_available and self.node.new_error_available:
-            updated_depth = self.node.position_state[2:3]
-            updated_surge = self.node.v_state[0:1]
-            updated_sway = self.node.v_state[1:2]
-            updated_heave = self.node.v_state[2:3]
+            depth = self.node.position_state[2:3]
+            depth_error = self.node.position_err[2:3]
+            surge_velocity_error = self.node.v_err[0:1]
+            sway_velocity_error = self.node.v_err[1:2]
+
+            roll_error = self.node.orientation_err[0:1]
+            pitch_error = self.node.orientation_err[1:2]
+            yaw_error = self.node.orientation_err[2:3]
+
+            roll_sin_err = np.array([np.sin(self.node.orientation_err[0])])
+            roll_cos_err = np.array([np.cos(self.node.orientation_err[0])])
+            pitch_sin_err = np.array([np.sin(self.node.orientation_err[1])])
+            pitch_cos_err = np.array([np.cos(self.node.orientation_err[1])])
+            yaw_sin_err = np.array([np.sin(self.node.orientation_err[2])])
+            yaw_cos_err = np.array([np.cos(self.node.orientation_err[2])])
             
-            # Convert updated orientation to sin/cos
-            updated_roll = self.node.orientation_state[0]
-            updated_pitch = self.node.orientation_state[1]
-            updated_yaw = self.node.orientation_state[2]
+            roll_sin_current = np.array([np.sin(self.node.orientation_state[0])])
+            roll_cos_current = np.array([np.cos(self.node.orientation_state[0])])
+            pitch_sin_current = np.array([np.sin(self.node.orientation_state[1])])
+            pitch_cos_current = np.array([np.cos(self.node.orientation_state[1])])
+            yaw_sin_current = np.array([np.sin(self.node.orientation_state[2])])
+            yaw_cos_current = np.array([np.cos(self.node.orientation_state[2])])
             
-            updated_roll_sin = np.sin(updated_roll)
-            updated_roll_cos = np.cos(updated_roll)
-            updated_pitch_sin = np.sin(updated_pitch)
-            updated_pitch_cos = np.cos(updated_pitch)
-            updated_yaw_sin = np.sin(updated_yaw)
-            updated_yaw_cos = np.cos(updated_yaw)
+            surge_velocity = self.node.v_state[0:1]
+            sway_velocity = self.node.v_state[1:2]
+            heave_velocity = self.node.v_state[2:3]
             
-            updated_depth_error = self.node.position_err[2:3]
-            updated_surge_error = self.node.v_err[0:1]
-            updated_sway_error = self.node.v_err[1:2]
-            updated_heave_error = self.node.v_err[2:3]
+            roll_rate = self.node.omega_ref_state[0:1]
+            pitch_rate = self.node.omega_ref_state[1:2]
+            yaw_rate = self.node.omega_ref_state[2:3]
             
-            # Convert updated orientation errors to sin/cos
-            updated_roll_error = self.node.orientation_err[0]
-            updated_pitch_error = self.node.orientation_err[1]
-            updated_yaw_error = self.node.orientation_err[2]
-            updated_roll_sin_error = np.sin(updated_roll_error)
-            updated_roll_cos_error = np.cos(updated_roll_error)
-            updated_pitch_sin_error = np.sin(updated_pitch_error)
-            updated_pitch_cos_error = np.cos(updated_pitch_error)
-            updated_yaw_sin_error = np.sin(updated_yaw_error)
-            updated_yaw_cos_error = np.cos(updated_yaw_error)
+            x_acceleration = self.node.linear_acceleration[0:1]
+            y_acceleration = self.node.linear_acceleration[1:2]
             
             observation = np.concatenate([
-                # Error components (10 elements)
-                updated_depth_error,                           # [0]
-                updated_surge_error,                           # [1]
-                updated_sway_error,                            # [2]
-                np.array([updated_roll_sin_error]),            # [3]
-                np.array([updated_roll_cos_error]),            # [4]
-                np.array([updated_pitch_sin_error]),           # [5]
-                np.array([updated_pitch_cos_error]),           # [6]
-                np.array([updated_yaw_sin_error]),             # [7]
-                np.array([updated_yaw_cos_error]),             # [8]
-                # updated_heave_error,                           # [9]
-                
-                # Velocity components (3 elements)
-                updated_surge,                                 # [10] - surge velocity
-                updated_sway,                                  # [11] - sway velocity
-                updated_heave,                                 # [12] - heave velocity
-                
-                # Angular rate components (3 elements) 
-                self.node.omega_ref_state[0:1],                # [13] - roll rate
-                self.node.omega_ref_state[1:2],                # [14] - pitch rate
-                self.node.omega_ref_state[2:3],                # [15] - yaw rate
-
-                self.node.linear_acceleration[0:1],            # [16] - x acceleration
-                self.node.linear_acceleration[1:2]             # [17] - y acceleration
+                depth,
+                depth_error,
+                surge_velocity_error,
+                sway_velocity_error,
+                roll_sin_err,
+                roll_cos_err,
+                pitch_sin_err,
+                pitch_cos_err,
+                yaw_sin_err,
+                yaw_cos_err,
+                roll_sin_current,
+                roll_cos_current,
+                pitch_sin_current,
+                pitch_cos_current,
+                yaw_sin_current,
+                yaw_cos_current,
+                surge_velocity,
+                sway_velocity,
+                heave_velocity,
+                roll_rate,
+                pitch_rate,
+                yaw_rate,
+                x_acceleration,
+                y_acceleration,
             ])
             
-            # Create error array for reward calculation
-            # Include both sin and cos components for angle errors
             state_error_array = np.concatenate([
-                updated_depth_error,
-                updated_surge_error,
-                updated_sway_error,
-                updated_heave_error,
-                np.array([updated_roll_sin_error, updated_roll_cos_error]),
-                np.array([updated_pitch_sin_error, updated_pitch_cos_error]),
-                np.array([updated_yaw_sin_error, updated_yaw_cos_error])
+                depth_error,
+                surge_velocity_error,
+                sway_velocity_error,
+                self.node.v_err[2:3], #heave error
+                # np.array([np.sin(self.node.orientation_err[0]), np.cos(self.node.orientation_err[0])]),
+                # np.array([np.sin(self.node.orientation_err[1]), np.cos(self.node.orientation_err[1])]),
+                # np.array([np.sin(self.node.orientation_err[2]), np.cos(self.node.orientation_err[2])])
+                roll_error,
+                pitch_error,
+                yaw_error
             ])
-
-            if state_error_array is None:
-                state_error_array = np.zeros(len(state_error_array))
 
             terminated = False
 
         else:
             print("Warning: No new state/error available, returning dummy observation")
-            observation = np.zeros(17)  # Updated observation size: 10 errors + 3 velocities + 3 angular rates + 2 accelerations
+            observation = np.zeros(24)
             terminated = True
-            state_error_array = np.zeros(10)  # Default error array
+            state_error_array = np.zeros(7)
 
-        # Calculate coupling-aware reward
         reward = self.calculate_reward(state_error_array)
+
         if isinstance(reward, np.ndarray):
             reward = float(reward.item())
 
-        # Store raw reward in episode rewards list
         if not hasattr(self, 'episode_rewards'):
             self.episode_rewards = []
         self.episode_rewards.append(reward)
 
-        # Track cumulative episode reward (using raw reward)
         self.episode_reward += reward
 
-        # Check if episode should end
         truncated = False
         if self.episode_step >= self.node.max_steps:
             truncated = True
             
-        # Increment step counter
         self.episode_step += 1
 
-        # Add episode info to the info dict
         info = {
             'episode_step': self.episode_step,
             'episode_reward': self.episode_reward,
@@ -990,8 +952,10 @@ class AUVEnv(gym.Env):
     def _calculate_standard_performance_error(self, state_error_array):
         """Standard performance error calculation for fallback"""
         original_weights = np.array(self.config['reward_function']['state_error_weights'])
-        state_error_weights = self._expand_weights_for_sincos(original_weights, state_error_array)
-        
+        # state_error_weights = self._expand_weights_for_sincos(original_weights, state_error_array)
+
+        state_error_weights = original_weights
+
         error_column = state_error_array.reshape(-1, 1)
         error_row = state_error_array.reshape(1, -1)
         weights_diag = np.diag(state_error_weights)
