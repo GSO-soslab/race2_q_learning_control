@@ -1,0 +1,210 @@
+# SAC Training Configuration for AUV Offline Learning
+# This config file controls all aspects of SAC training from CSV data
+
+# Data Configuration
+data:
+  train_split: 0.8                    # Fraction of data for training (rest for validation)
+  shuffle_data: true                  # Whether to shuffle data during loading
+  normalize_states: true              # Whether to normalize state observations
+  normalize_actions: true             # Whether to normalize action data
+  random_seed: 42                     # Random seed for reproducibility
+
+# Model Architecture
+model:
+  # Actor Network (Policy)
+  actor:
+    hidden_layers: [256, 256, 256]     # Hidden layer sizes
+    activation: 'relu'                 # Activation function: 'relu', 'tanh', 'elu'
+    output_activation: 'tanh'          # Output activation for actions
+    dropout: 0.0                       # Dropout rate (0.0 = no dropout)
+    
+  # Critic Networks (Q-functions)
+  critic:
+    hidden_layers: [256, 256, 256]     # Hidden layer sizes  
+    activation: 'relu'                 # Activation function
+    dropout: 0.0                       # Dropout rate
+    
+  # Action bounds
+  action_scale: 1.0                    # Scale factor for actions
+  action_bias: 0.0                     # Bias for actions
+
+# SAC Algorithm Parameters
+sac:
+  # Learning rates
+  actor_lr: 3e-4                       # Actor learning rate
+  critic_lr: 3e-4                      # Critic learning rate
+  alpha_lr: 3e-4                       # Entropy coefficient learning rate
+  
+  # SAC hyperparameters
+  gamma: 0.99                          # Discount factor
+  tau: 0.005                           # Soft update coefficient for target networks
+  alpha: 0.2                           # Initial entropy coefficient (if not auto-tuned)
+  auto_entropy_tuning: true            # Whether to automatically tune entropy coefficient
+  target_entropy_scale: 1.0            # Scale factor for target entropy (-action_dim * scale)
+  
+  # Optimizer settings
+  optimizer: 'adam'                    # Optimizer type
+  weight_decay: 1e-4                   # Weight decay (L2 regularization)
+  betas: [0.9, 0.999]                  # Adam betas
+  eps: 1e-8                            # Adam epsilon
+
+# Training Configuration
+training:
+  batch_size: 256                      # Batch size for training
+  num_epochs: 200                      # Number of training epochs
+  validate_every: 5                    # Validate every N epochs
+  save_every: 25                       # Save checkpoint every N epochs
+  
+  # Early stopping
+  early_stopping:
+    enabled: true                      # Enable early stopping
+    patience: 20                       # Number of epochs to wait for improvement
+    min_delta: 1e-4                    # Minimum change to qualify as improvement
+    
+  # Learning rate scheduling
+  lr_scheduler:
+    enabled: false                     # Enable learning rate scheduling
+    type: 'cosine'                     # 'cosine', 'step', 'exponential'
+    step_size: 50                      # For step scheduler
+    gamma_lr: 0.5                      # Decay factor
+
+# Data Loading
+dataloader:
+  num_workers: 0                       # Number of worker processes for data loading
+  pin_memory: true                     # Pin memory for faster GPU transfer
+  drop_last: false                     # Drop last incomplete batch
+  persistent_workers: true             # Keep workers alive between epochs
+
+# Device Configuration  
+device:
+  auto_select: true                    # Automatically select best device
+  preferred: 'cuda'                    # Preferred device: 'cuda', 'cpu'
+  cuda_device_id: 0                    # Specific CUDA device ID
+
+# Logging Configuration
+logging:
+  # Tensorboard logging
+  tensorboard:
+    enabled: true                      # Enable tensorboard logging
+    log_dir: 'runs/sac_training'       # Directory for tensorboard logs
+    log_every: 1                       # Log every N epochs
+    log_histograms: true               # Log weight/gradient histograms
+    log_images: false                  # Log any images (if applicable)
+    
+  # Weights & Biases logging
+  wandb:
+    enabled: false                     # Enable wandb logging  
+    project: 'auv-sac-offline'         # Wandb project name
+    entity: null                       # Wandb entity (username/team)
+    tags: ['sac', 'offline', 'auv']    # Tags for the run
+    notes: 'SAC training from rosbag CSV data'  # Run description
+    
+  # Console logging
+  console:
+    log_level: 'INFO'                  # Log level: 'DEBUG', 'INFO', 'WARNING', 'ERROR'
+    print_every: 5                     # Print progress every N epochs
+    show_progress_bar: true            # Show progress bar during training
+
+# Model Saving
+checkpointing:
+  save_dir: 'checkpoints'              # Directory to save model checkpoints
+  save_best: true                      # Save best model based on validation loss
+  save_latest: true                    # Always save latest model
+  save_every_n_epochs: 25              # Save checkpoint every N epochs
+  max_checkpoints: 5                   # Maximum number of checkpoints to keep
+  
+  # What to save in checkpoints
+  save_optimizer_state: true          # Save optimizer states
+  save_scheduler_state: true          # Save scheduler states (if used)
+  save_training_stats: true           # Save training statistics
+
+# Evaluation Configuration
+evaluation:
+  # Validation during training
+  validation:
+    enabled: true                      # Enable validation
+    metrics: ['mse_loss', 'q_loss', 'policy_loss']  # Metrics to compute
+    
+  # Model evaluation after training
+  final_evaluation:
+    enabled: true                      # Enable final evaluation
+    save_predictions: true             # Save model predictions on test set
+    create_plots: true                 # Create evaluation plots
+    plot_types: ['loss_curves', 'action_distribution', 'q_values']
+
+# Coupling-aware reward configuration (same as your existing config)
+coupling:
+  method: 'v4'                         # Options: 'v1', 'v2', 'v3', 'v4', 'standard'
+  
+  # Base coupling strength parameters
+  surge_yaw_weight: 0.25               # Surge-yaw coupling strength
+  pitch_depth_weight: 0.6              # Pitch-depth coupling strength  
+  threshold: 0.05                      # Coupling threshold
+  
+  # Progressive learning parameters (for v2)
+  progressive:
+    enabled: true
+    exploration_episodes: 50
+    coupling_focus_episodes: 100
+    
+  # Dynamic coupling parameters (for v3)
+  dynamic:
+    history_window: 15
+    adaptation_rate: 0.1
+    
+  # Energy-based parameters (for v4)
+  energy:
+    spring_stiffness: 0.3
+    damping_factor: 0.4
+    
+  # Surge-specific fixes
+  surge_fixes:
+    priority_mode: true
+    error_threshold: 0.15
+    coupling_reduction: 0.3
+    progress_bonus_scale: 0.2
+    setpoint_tracking_bonus: 0.15
+
+# Reward function configuration
+reward_function:
+  w1: 0.8                              # Base performance weight
+  w2: 0.0                              # Servo smoothness weight
+  w3: 0.0                              # Thruster usage weight  
+  w4: 0.08                             # Thruster smoothness weight
+  w5: 0.0                              # Servo angle weight
+  w6: 0.0                              # Thruster delta weight
+  w7: 0.0                              # Action smoothness weight
+  w8: 0.0                              # Direction change penalty weight
+  
+  # State error weights (used in coupling calculations)
+  state_error_weights: [
+    0.5,  # depth (z)
+    1.0,  # surge
+    0.0,  # sway  
+    0.0,  # heave
+    0.0,  # roll
+    0.1,  # pitch
+    1.0   # yaw
+  ]
+
+# Environment parameters (for reference/compatibility)
+environment:
+  state_dim: 24                        # State observation dimension
+  action_dim: 6                        # Action dimension (4 thrusters + 2 servos)
+  thruster_size: 4                     # Number of thrusters
+  servo_joints_size: 2                 # Number of servo joints
+  max_action: 1.0                      # Maximum action value
+  
+# Debugging and Development
+debug:
+  enabled: false                       # Enable debug mode
+  save_intermediate_outputs: false     # Save intermediate network outputs
+  check_gradients: false               # Check for gradient issues
+  profile_training: false              # Profile training performance
+  verbose_losses: false                # Print detailed loss information
+  
+# Reproducibility
+reproducibility:
+  seed: 42                             # Global random seed
+  deterministic: true                  # Use deterministic algorithms where possible
+  benchmark: false                     # Enable cudnn benchmark for speed (less deterministic)

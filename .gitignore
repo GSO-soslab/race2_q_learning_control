@@ -13,6 +13,8 @@ DDPG/checkpoints/*
 sb3/auv_venv
 sb3/results 
 sb3/data
+SAC_offline/checkpoints
+SAC_offline/runs
 # Gradle
 .idea/**/gradle.xml
 .idea/**/libraries
