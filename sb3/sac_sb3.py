@@ -8,21 +8,131 @@ import argparse
 from datetime import datetime
 import matplotlib.pyplot as plt
 import copy
-
-# Stable Baselines 3 imports
+from tqdm import tqdm  
 from stable_baselines3 import SAC
 from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
 from stable_baselines3.common.logger import configure
 import torch as th
 import torch.nn as nn
 
-# For environment compatibility
 import gym
 
-# Import custom environment (now with integrated setpoint publisher AND CSV support)
 from AUVEnv import AUVEnv
 
-# Your existing callback classes remain exactly the same...
+# class LayerNormMLP(nn.Module):
+#     """MLP with Layer Normalization"""
+    
+#     def __init__(self, input_dim: int, output_dim: int, net_arch: List[int], activation_fn: Type[nn.Module] = nn.ReLU):
+#         super().__init__()
+        
+#         layers = []
+#         prev_dim = input_dim
+        
+#         # Hidden layers with LayerNorm
+#         for hidden_dim in net_arch:
+#             layers.extend([
+#                 nn.Linear(prev_dim, hidden_dim),
+#                 nn.LayerNorm(hidden_dim),  # Add Layer Norm
+#                 activation_fn()
+#             ])
+#             prev_dim = hidden_dim
+        
+#         # Output layer (no norm on output)
+#         layers.append(nn.Linear(prev_dim, output_dim))
+        
+#         self.network = nn.Sequential(*layers)
+    
+#     def forward(self, x):
+#         return self.network(x)
+
+# class LayerNormSACPolicy(SACPolicy):
+#     """SAC Policy with Layer Normalization"""
+    
+#     def __init__(self, *args, **kwargs):
+#         super().__init__(*args, **kwargs)
+    
+#     def make_actor(self, features_extractor: BaseFeaturesExtractor) -> "Actor":
+#         actor_kwargs = self._update_features_extractor(self.actor_kwargs, features_extractor)
+        
+#         # Get network architecture
+#         net_arch = actor_kwargs.get("net_arch", [256, 256])
+#         activation_fn = actor_kwargs.get("activation_fn", nn.ReLU)
+        
+#         # Create custom actor with LayerNorm
+#         from stable_baselines3.sac.policies import Actor
+        
+#         class LayerNormActor(Actor):
+#             def __init__(self, *args, **kwargs):
+#                 super().__init__(*args, **kwargs)
+                
+#                 # Replace latent_pi with LayerNorm version
+#                 obs_dim = self.features_extractor.features_dim
+#                 self.latent_pi = LayerNormMLP(
+#                     input_dim=obs_dim,
+#                     output_dim=net_arch[-1],  # Last hidden layer size
+#                     net_arch=net_arch[:-1],   # All but last layer
+#                     activation_fn=activation_fn
+#                 )
+        
+#         return LayerNormActor(**actor_kwargs)
+    
+#     def make_critic(self, features_extractor: BaseFeaturesExtractor) -> "ContinuousCritic":
+#         critic_kwargs = self._update_features_extractor(self.critic_kwargs, features_extractor)
+        
+#         # Get network architecture  
+#         net_arch = critic_kwargs.get("net_arch", [256, 256])
+#         activation_fn = critic_kwargs.get("activation_fn", nn.ReLU)
+        
+#         from stable_baselines3.sac.policies import ContinuousCritic
+        
+#         class LayerNormCritic(ContinuousCritic):
+#             def __init__(self, *args, **kwargs):
+#                 super().__init__(*args, **kwargs)
+                
+#                 # Replace q_networks with LayerNorm versions
+#                 obs_dim = self.features_extractor.features_dim
+#                 action_dim = self.action_space.shape[0]
+#                 input_dim = obs_dim + action_dim
+                
+#                 self.q_networks = nn.ModuleList([
+#                     LayerNormMLP(
+#                         input_dim=input_dim,
+#                         output_dim=1,
+#                         net_arch=net_arch,
+#                         activation_fn=activation_fn
+#                     )
+#                     for _ in range(2)  # SAC uses 2 Q-networks
+#                 ])
+        
+#         return LayerNormCritic(**critic_kwargs)
+
+class PIDActionLearningCallback(BaseCallback):
+    """Callback that makes SAC learn from PID actions in CSV mode"""
+    
+    def __init__(self, verbose=0):
+        super().__init__(verbose)
+        
+    def _on_step(self) -> bool:
+        # Check if we're in CSV mode and have recorded action
+        info = self.locals.get("infos", [{}])[0]
+        
+        if 'recorded_action' in info:
+            # Replace the action in the replay buffer with PID action
+            if self.model.replay_buffer.size() > 0:
+                pid_action = info['recorded_action']
+                
+                # Get the last added transition
+                buffer = self.model.replay_buffer
+                last_idx = (buffer.pos - 1) % buffer.buffer_size
+                
+                # Replace SAC action with PID action
+                buffer.actions[last_idx] = pid_action
+                
+                if self.verbose > 0 and self.num_timesteps % 1000 == 0:
+                    print(f"Step {self.num_timesteps}: Learning from PID actions")
+        
+        return True
+    
 class WarmupMonitoringCallback(BaseCallback):
     """
     Callback to monitor warmup phase and training transitions
@@ -573,6 +683,103 @@ Data-driven learning from real AUV recordings"""
                 episode_type = "WARMUP" if episode_num <= self.warmup_episodes else "TRAINING"
                 f.write(f"  Episode {episode_num} ({episode_type}): start={info['start_timestamp']:.1f}s, length={info['episode_length']} steps\n")
 
+
+def prefill_replay_buffer_with_csv_data(model, csv_directory, config, num_epochs=3):
+    """Fill replay buffer with CSV data multiple times with shuffling"""
+    from csv_data_manager import CSVDataManager
+    
+    # Load all CSV data once
+    csv_manager = CSVDataManager(csv_directory, config)
+    total_transitions = csv_manager.total_steps - 1  # Need next_obs
+    
+    print(f"Pre-filling replay buffer with {total_transitions} transitions across {num_epochs} epochs...")
+    print(f"Total data exposure: {total_transitions * num_epochs} transition samples")
+    
+    transitions_added = 0
+    
+    for epoch in range(num_epochs):
+        print(f"\nEpoch {epoch + 1}/{num_epochs}: Shuffling and loading data...")
+        
+        # Create shuffled indices for this epoch
+        indices = list(range(total_transitions))
+        np.random.shuffle(indices)
+        
+        epoch_added = 0
+        for i, data_idx in enumerate(indices):
+            # Check if buffer is full
+            if model.replay_buffer.size() >= model.replay_buffer.buffer_size:
+                print(f"Replay buffer full at {model.replay_buffer.size()} samples")
+                return transitions_added
+            
+            # Get current transition
+            csv_manager.current_step = data_idx
+            csv_manager._update_state_from_step(data_idx)
+            obs = csv_manager._get_current_state_observation()
+            pid_action = csv_manager.get_recorded_action_at_current_step()
+            
+            # Get next observation  
+            csv_manager.current_step = data_idx + 1
+            csv_manager._update_state_from_step(data_idx + 1)
+            next_obs = csv_manager._get_current_state_observation()
+            
+            # Calculate reward for this transition
+            csv_manager.current_step = data_idx  # Reset to current for reward calculation
+            csv_manager._update_state_from_step(data_idx)
+            state_error_array = csv_manager.get_state_error_array()
+            
+            # Use simple reward calculation to avoid format mismatch
+            # Apply standard quadratic penalty on errors
+            w = config['reward_function']
+            state_error_weights = w.get('state_error_weights', [1.0] * len(state_error_array))
+            
+            # Ensure weights match error array size
+            if len(state_error_weights) != len(state_error_array):
+                # Use first weight for all if mismatch
+                weight_val = state_error_weights[0] if state_error_weights else 1.0
+                state_error_weights = [weight_val] * len(state_error_array)
+            
+            # Calculate simple quadratic reward
+            performance_error = 0
+            for i, (error, weight) in enumerate(zip(state_error_array, state_error_weights)):
+                performance_error += weight * (error ** 2)
+            
+            reward = -performance_error  # Negative because we want to minimize errors
+            
+            # Determine if this is a terminal state (only at very end of data)
+            done = (data_idx == total_transitions - 1)
+            
+            # Add to replay buffer
+            obs = np.array(obs, dtype=np.float32).flatten()
+            next_obs = np.array(next_obs, dtype=np.float32).flatten()  
+            pid_action = np.array(pid_action, dtype=np.float32).flatten()[:4] #only 4 cause of thrusters with no servos. 
+            reward = float(reward)
+            done = bool(done)
+
+            model.replay_buffer.add(obs, next_obs, pid_action, reward, done, [{}])
+            
+            transitions_added += 1
+            epoch_added += 1
+            
+            # Progress indicator
+            if i % 5000 == 0:
+                progress = (i / len(indices)) * 100
+                print(f"  Epoch {epoch + 1} progress: {i}/{len(indices)} ({progress:.1f}%)")
+        
+        print(f"  Epoch {epoch + 1} completed: {epoch_added} transitions added")
+        print(f"  Buffer size: {model.replay_buffer.size()}/{model.replay_buffer.buffer_size}")
+        
+        # If buffer is full, stop
+        if model.replay_buffer.size() >= model.replay_buffer.buffer_size:
+            break
+    
+    print(f"\n✅ Multi-epoch loading completed!")
+    print(f"  Total transitions added: {transitions_added}")
+    print(f"  Buffer utilization: {model.replay_buffer.size()}/{model.replay_buffer.buffer_size} ({model.replay_buffer.size()/model.replay_buffer.buffer_size*100:.1f}%)")
+    print(f"  Data seen {transitions_added / total_transitions:.1f}x times on average")
+    
+    return transitions_added
+
+
 def load_config(config_path):
     """Load configuration from YAML file"""
     try:
@@ -591,11 +798,13 @@ def main():
     parser.add_argument('--gradient_monitor_interval', type=int, default=100, help='Gradient monitoring interval')
     parser.add_argument('--learning_starts', type=int, default=None, help='Warmup period steps')
     
-    # NEW: Add CSV support arguments
     parser.add_argument('--csv_directory', type=str, default=None, 
                        help='Directory containing CSV files from rosbags for offline training')
     parser.add_argument('--csv_mode', action='store_true', 
                        help='Enable CSV mode (alternative to --csv_directory)')
+    
+    parser.add_argument('--csv_epochs', type=int, default=3, 
+                   help='Number of epochs to load CSV data (default: 3)')
     
     args = parser.parse_args()
 
@@ -604,11 +813,11 @@ def main():
     config = load_config(config_path)
 
     # Set random seed
-    random_seed = config['others']['random_seed']
+    # random_seed = config['others']['random_seed']
+    random_seed = int(time.time()) % 10000  # Random seed each run
     np.random.seed(random_seed)
     th.manual_seed(random_seed)
 
-    # NEW: Determine training mode and create environment accordingly
     if args.csv_directory or args.csv_mode:
         if args.csv_directory:
             csv_dir = args.csv_directory
@@ -620,6 +829,7 @@ def main():
         
         print(f"Creating AUV environment in CSV mode using data from: {csv_dir}")
         env = AUVEnv(csv_directory=csv_dir)  # Pass CSV directory to enable CSV mode
+
         training_mode = "CSV"
         
     else:
@@ -678,8 +888,15 @@ def main():
             # Use config value if available, otherwise use a reasonable default
             learning_starts = config['agent'].get('learning_starts', min(1000, batch_size * 4))
         
+        optimizer_kwargs = config['agent'].get('optimizer_kwargs', {
+            "betas": (0.9, 0.9),
+            "weight_decay": 1e-4
+        })
+
         policy_kwargs = {
             "net_arch": config['qnetwork']['actor_hidden_layers'],
+            "optimizer_class": th.optim.Adam,
+            "optimizer_kwargs": optimizer_kwargs
         }
 
         if args.resume_from_checkpoint:
@@ -689,6 +906,16 @@ def main():
                 env=env,
                 tensorboard_log=log_dir,
             )
+
+            if args.csv_directory or args.csv_mode:
+                print("🔄 Pre-filling replay buffer with CSV data...")
+                # csv_data_points = prefill_replay_buffer_with_csv_data(model, csv_dir, config)
+                csv_epochs = getattr(args, 'csv_epochs', 3) 
+                csv_data_points = prefill_replay_buffer_with_csv_data(model, csv_dir, config, csv_epochs)
+
+                print(f"✅ Loaded {csv_data_points} transitions from CSV data")
+                print(f"   Buffer utilization: {model.replay_buffer.size()}/{buffer_size} ({model.replay_buffer.size()/buffer_size*100:.1f}%)")
+        
             print(f"Model loaded. Current timesteps: {model.num_timesteps}")
             print(f"Warmup period: {model.learning_starts} steps")
             print(f"Training will continue in {training_mode} mode.")
@@ -712,9 +939,38 @@ def main():
                 verbose=1,
                 tensorboard_log=log_dir
             )
+
+            # model = SAC(
+            #     LayerNormSACPolicy,  # Use custom policy with LayerNorm
+            #     env,
+            #     learning_rate=learning_rate,
+            #     buffer_size=buffer_size,
+            #     learning_starts=learning_starts,
+            #     batch_size=batch_size,
+            #     gamma=gamma,
+            #     tau=tau,
+            #     ent_coef=ent_coef,
+            #     target_update_interval=target_update_interval,
+            #     seed=random_seed,
+            #     policy_kwargs={
+            #         "net_arch": config['qnetwork']['actor_hidden_layers'],
+            #         "activation_fn": th.nn.ReLU,
+            #     },
+            #     replay_buffer_kwargs=replay_buffer_kwargs,
+            #     verbose=1,
+            #     tensorboard_log=log_dir
+            # )
             print(f"Learning rate: {learning_rate}, buffer_size: {buffer_size}, batch_size: {batch_size}")
             print(f"Warmup period (learning_starts): {learning_starts} steps")
             print(f"Actor network: {config['qnetwork']['actor_hidden_layers']}")
+
+
+        if args.csv_directory or args.csv_mode:
+                print("🔄 Pre-filling replay buffer with CSV data...")
+                csv_epochs = getattr(args, 'csv_epochs', 3) 
+                csv_data_points = prefill_replay_buffer_with_csv_data(model, csv_dir, config, csv_epochs)
+                print(f"✅ Loaded {csv_data_points} transitions from CSV data")
+                print(f"   Buffer utilization: {model.replay_buffer.size()}/{buffer_size} ({model.replay_buffer.size()/buffer_size*100:.1f}%)")
 
         # Configure custom logger
         new_logger = configure(log_dir, ["stdout", "csv", "tensorboard"])
@@ -742,6 +998,15 @@ def main():
         
         # Add warmup monitoring callback
         warmup_callback = WarmupMonitoringCallback(verbose=1)
+
+
+        # Collect all callbacks
+        callbacks = [checkpoint_callback, plot_callback, gradient_callback, warmup_callback]
+        
+        # Add PID action learning callback for CSV mode
+        if args.csv_directory or args.csv_mode:
+            callbacks.append(PIDActionLearningCallback(verbose=1))
+            print("PID action learning callback for CSV mode")
 
         # Determine total timesteps
         if args.timesteps:

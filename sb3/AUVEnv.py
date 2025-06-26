@@ -205,7 +205,7 @@ class AUVEnvNode(Node):
         self.max_steps = self.get_parameter('max_steps').value
     
     def publish_current_setpoint_callback(self):
-        """Continuously publish the current setpoint (like your original publisher)"""
+        """Continuously publish the current setpoint """
         if self.setpoint_manager.current_setpoint is not None:
             # Update timestamp and publish
             self.setpoint_manager.current_setpoint.header.stamp = self.get_clock().now().to_msg()
@@ -352,7 +352,6 @@ class AUVEnvNode(Node):
     def publish_action(self, action, num_thrusters, num_servos):
         """Publish actions to ROS2 topics"""
         
-        # Modify your action space interpretation
         heave_bow = action[0]
         heave_stern = action[1]
         # surge_command = action[2]     # Pure surge desire
@@ -374,7 +373,6 @@ class AUVEnvNode(Node):
             servo_angles_rad.append(self.convert_servo_command_to_radians(angle))
         
         # Map to appropriate publishers
-        # All DOFs - modify as needed for your specific configuration
         thruster_mapping = [
             ('heave_bow', thruster_cmds[0]),
             ('heave_stern', thruster_cmds[1]),
@@ -466,7 +464,6 @@ class AUVEnv(gym.Env):
         )
         
         # Update observation space to include angular rates and all velocities
-        # New observation: [errors(10) + velocities(3) + angular_rates(3)] = 16 dimensions
         self.observation_space = spaces.Box(
             low=-np.inf, 
             high=np.inf, 

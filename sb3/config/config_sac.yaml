@@ -30,15 +30,20 @@ training:
   save_freq_timesteps: 10
 
 agent:
-  learning_rate: 0.0003        
-  buffer_size: 50000
-  batch_size: 32
+  learning_rate: 0.0001        
+  buffer_size: 1000000
+  batch_size: 128
   gamma: 0.99
   tau: 0.005
   ent_coef: auto           
   target_update_interval: 1
   # replay_buffer_kwargs: # Optional arguments for the replay buffer
-  learning_starts: 3000
+  learning_starts: 10
+
+  optimizer_kwargs:
+    betas: [0.9, 0.9]           # Equal betas
+    weight_decay: 0.0001        # Weight decay
+    eps: 0.00000001             
 
 qnetwork:
   actor_hidden_layers: [400, 300, 200]

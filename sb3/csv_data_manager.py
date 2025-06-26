@@ -614,37 +614,6 @@ class CSVDataManager:
         roll_error = self.orientation_err[0:1]
         pitch_error = self.orientation_err[1:2]
         yaw_error = self.orientation_err[2:3]
-
-        # roll_sin_err = np.array([np.sin(self.node.orientation_err[0])])
-        # roll_cos_err = np.array([np.cos(self.node.orientation_err[0])])
-        # pitch_sin_err = np.array([np.sin(self.node.orientation_err[1])])
-        # pitch_cos_err = np.array([np.cos(self.node.orientation_err[1])])
-        # yaw_sin_err = np.array([np.sin(self.node.orientation_err[2])])
-        # yaw_cos_err = np.array([np.cos(self.node.orientation_err[2])])
-        
-        # roll_sin_current = np.array([np.sin(self.node.orientation_state[0])])
-        # roll_cos_current = np.array([np.cos(self.node.orientation_state[0])])
-        # pitch_sin_current = np.array([np.sin(self.node.orientation_state[1])])
-        # pitch_cos_current = np.array([np.cos(self.node.orientation_state[1])])
-        # yaw_sin_current = np.array([np.sin(self.node.orientation_state[2])])
-        # yaw_cos_current = np.array([np.cos(self.node.orientation_state[2])])
-        
-        # surge_velocity = self.node.v_state[0:1]
-        # sway_velocity = self.node.v_state[1:2]
-        # heave_velocity = self.node.v_state[2:3]
-        
-        # roll_rate = self.node.omega_ref_state[0:1]
-        # pitch_rate = self.node.omega_ref_state[1:2]
-        # yaw_rate = self.node.omega_ref_state[2:3]
-        
-        # x_acceleration = self.node.linear_acceleration[0:1]
-        # y_acceleration = self.node.linear_acceleration[1:2]
-
-        # return np.concatenate([
-        #     self.position_err[2:3],   # depth error
-        #     self.v_err[:3],           # surge, sway, heave error
-        #     np.array([roll_sin_err, roll_cos_err, pitch_sin_err, pitch_cos_err, yaw_sin_err, yaw_cos_err])
-        # ])
     
         return np.concatenate([
                 depth_error,
