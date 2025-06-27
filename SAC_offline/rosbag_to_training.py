@@ -13,6 +13,7 @@ from pathlib import Path
 import yaml
 from collections import defaultdict
 import os
+from coupling_rewards import CouplingAwareRewardCalculator
 
 try:
     import rosbag2_py
@@ -31,9 +32,7 @@ class McapToTrainingCSV:
         self.config = self._load_config(config_path)
         
         # Initialize coupling reward calculator
-        from coupling_rewards import CouplingAwareRewardCalculator
         self.coupling_calculator = CouplingAwareRewardCalculator(self.config) if self.config else None
-        
         # Define topic mappings (update these to match your actual topics)
         self.topic_mappings = {
             '/race2_auv/controller/process/value': 'state',

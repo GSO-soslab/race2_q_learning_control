@@ -265,21 +265,24 @@ class CouplingAwareRewardCalculator:
             print("Warning: state_error_array is None, returning default reward")
             return -1.0
         
-        if len(state_error_array) < 10:
-            print(f"Warning: state_error_array too short ({len(state_error_array)}), expected 10")
-            return -1.0
+        # if len(state_error_array) < 10:
+        #     print(f"Warning: state_error_array too short ({len(state_error_array)}), expected 10")
+        #     return -1.0
         
         try:
             # Extract errors with safe indexing
             depth_error = float(state_error_array[0])
             surge_error = float(state_error_array[1]) # to scaLe surge up compared to other guys
             
-            pitch_sin_err, pitch_cos_err = float(state_error_array[6]), float(state_error_array[7])
-            yaw_sin_err, yaw_cos_err = float(state_error_array[8]), float(state_error_array[9])
-            
-            # Use actual angle error magnitude
-            pitch_error_mag = abs(np.arctan2(pitch_sin_err, pitch_cos_err))
-            yaw_error_mag = abs(np.arctan2(yaw_sin_err, yaw_cos_err))
+            # pitch_sin_err, pitch_cos_err = float(state_error_array[6]), float(state_error_array[7])
+            # yaw_sin_err, yaw_cos_err = float(state_error_array[8]), float(state_error_array[9])
+
+            pitch_error_mag = abs(float(state_error_array[5]))  
+            yaw_error_mag = abs(float(state_error_array[6]))  
+
+            # # Use actual angle error magnitude
+            # pitch_error_mag = abs(np.arctan2(pitch_sin_err, pitch_cos_err))
+            # yaw_error_mag = abs(np.arctan2(yaw_sin_err, yaw_cos_err))
             
             # Store error history
             current_errors = {

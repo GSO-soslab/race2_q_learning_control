@@ -51,7 +51,6 @@ class AUVDataset(Dataset):
         print(f"✅ Dataset loaded: {len(self)} samples")
         print(f"Reward range: [{self.rewards.min():.3f}, {self.rewards.max():.3f}]")
         print(f"Reward mean: {self.rewards.mean():.3f} ± {self.rewards.std():.3f}")
-    
     def __len__(self):
         return len(self.data)
     
@@ -107,9 +106,9 @@ class OfflineSACTrainer:
         self.save_every = self.training_config.get('save_every', 25)
         
         # SAC parameters from config
-        self.actor_lr = self.sac_config.get('actor_lr', 3e-4)
-        self.critic_lr = self.sac_config.get('critic_lr', 3e-4)
-        self.alpha_lr = self.sac_config.get('alpha_lr', 3e-4)
+        self.actor_lr = float(self.sac_config.get('actor_lr', 3e-4))
+        self.critic_lr = float(self.sac_config.get('critic_lr', 3e-4))
+        self.alpha_lr = float(self.sac_config.get('alpha_lr', 3e-4))
         self.tau = self.sac_config.get('tau', 0.005)
         self.gamma = self.sac_config.get('gamma', 0.99)
         self.alpha = self.sac_config.get('alpha', 0.2)
@@ -254,11 +253,29 @@ class OfflineSACTrainer:
         }
     
     def load_data(self, csv_file):
-        """Load and split data"""
+        """Load and split data with reward statistics analysis"""
         self.logger.info(f"Loading data from: {csv_file}")
         
         # Load full dataset - keep on CPU
         full_dataset = AUVDataset(csv_file, device='cpu')
+
+        # ANALYZE REWARD STATISTICS for adaptive initialization
+        rewards = full_dataset.rewards.numpy()
+        self.reward_stats = {
+            'min': float(rewards.min()),
+            'max': float(rewards.max()),
+            'mean': float(rewards.mean()),
+            'std': float(rewards.std()),
+            'percentiles': {
+                '5': float(np.percentile(rewards, 5)),
+                '95': float(np.percentile(rewards, 95))
+            }
+        }
+        
+        self.logger.info(f"📊 Reward Statistics:")
+        self.logger.info(f"   Range: [{self.reward_stats['min']:.3f}, {self.reward_stats['max']:.3f}]")
+        self.logger.info(f"   Mean: {self.reward_stats['mean']:.3f} ± {self.reward_stats['std']:.3f}")
+        self.logger.info(f"   90% Range: [{self.reward_stats['percentiles']['5']:.3f}, {self.reward_stats['percentiles']['95']:.3f}]")
         
         # Split into train/validation
         train_split = self.data_config.get('train_split', 0.8)
@@ -267,11 +284,13 @@ class OfflineSACTrainer:
         val_size = total_size - train_size
         
         # Use torch's random_split for proper shuffling
-        train_dataset, val_dataset = torch.utils.data.random_split(
-            full_dataset, [train_size, val_size],
-            generator=torch.Generator().manual_seed(self.config.get('reproducibility', {}).get('seed', 42))
-        )
-        
+        # train_dataset, val_dataset = torch.utils.data.random_split(
+        #     full_dataset, [train_size, val_size],
+        #     generator=torch.Generator().manual_seed(self.config.get('reproducibility', {}).get('seed', 42))
+        # )
+        train_dataset = full_dataset
+        val_dataset = train_dataset
+
         self.logger.info(f"Data split: {train_size} train, {val_size} validation")
         
         # DataLoader configuration
@@ -283,7 +302,7 @@ class OfflineSACTrainer:
         self.train_loader = DataLoader(
             train_dataset, 
             batch_size=self.batch_size, 
-            shuffle=self.data_config.get('shuffle_data', True),
+            shuffle=self.data_config.get('shuffle_data', False),
             num_workers=dataloader_config.get('num_workers', 0),
             pin_memory=pin_memory,
             drop_last=dataloader_config.get('drop_last', False)
@@ -307,7 +326,7 @@ class OfflineSACTrainer:
         return full_dataset.get_normalization_params()
     
     def init_model(self):
-        """Initialize SAC model using config parameters"""
+        """Initialize SAC model with adaptive scaling based on dataset"""
         self.logger.info("Initializing SAC model from config...")
         
         # Get model configuration
@@ -356,6 +375,29 @@ class OfflineSACTrainer:
             dropout=critic_config.get('dropout', 0.0)
         ).to(self.device)
         
+        init_config = self.get_adaptive_init_config()
+        
+        # DEBUG: Log what was calculated
+        self.logger.info(f"🔧 Adaptive Init Config:")
+        self.logger.info(f"   Critic gain: {init_config['critic_gain']:.6f}")
+        self.logger.info(f"   Bias range: [{init_config['bias_min']:.3f}, {init_config['bias_max']:.3f}]")
+        self.logger.info(f"   Reward stats: min={self.reward_stats['min']:.3f}, max={self.reward_stats['max']:.3f}")
+
+        # Apply initialization to critics
+        for network in [self.critic1, self.critic2, self.target_critic1, self.target_critic2]:
+            for m in network.modules():
+                if isinstance(m, nn.Linear):
+                    nn.init.xavier_uniform_(m.weight, gain=init_config['critic_gain'])
+                    if m.bias is not None:
+                        nn.init.uniform_(m.bias, init_config['bias_min'], init_config['bias_max'])
+        
+        # Standard initialization for actor
+        for m in self.actor.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight, gain=1.0)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+        
         # Copy parameters to target networks
         self.target_critic1.load_state_dict(self.critic1.state_dict())
         self.target_critic2.load_state_dict(self.critic2.state_dict())
@@ -387,7 +429,6 @@ class OfflineSACTrainer:
             betas=betas,
             eps=eps
         )
-        
         # Automatic entropy tuning
         if self.auto_entropy_tuning:
             target_entropy_scale = self.sac_config.get('target_entropy_scale', 1.0)
@@ -401,6 +442,53 @@ class OfflineSACTrainer:
         
         self.logger.info("SAC model initialized successfully")
 
+    def get_adaptive_init_config(self):
+        """Calculate adaptive initialization parameters based on reward statistics"""
+        
+        if not hasattr(self, 'reward_stats'):
+            self.logger.warning("⚠️  No reward statistics available, using default initialization")
+            return {'critic_gain': 0.1, 'bias_min': -1.0, 'bias_max': 0.0, 'expected_q_min': -1.0, 'expected_q_max': 0.0}
+        
+        adaptive_config = self.model_config.get('adaptive_initialization', {})
+        
+        # Check for manual override
+        if 'manual' in adaptive_config:
+            manual = adaptive_config['manual']
+            return {
+                'critic_gain': float(manual.get('critic_gain', 0.01)),
+                'bias_min': float(manual.get('bias_min', -5.0)),
+                'bias_max': float(manual.get('bias_max', 0.0)),
+                'expected_q_min': float(manual.get('bias_min', -5.0)),
+                'expected_q_max': float(manual.get('bias_max', 0.0))
+            }
+        
+        # Use simple method (much safer than geometric series)
+        simple_config = adaptive_config.get('simple', {})
+        
+        reward_min = self.reward_stats['min'] 
+        reward_max = self.reward_stats['max']
+        reward_magnitude = max(abs(reward_min), abs(reward_max))
+        
+        # Simple scaling approach
+        init_scale = simple_config.get('init_scale', 3.0)
+        bias_min = reward_min * init_scale
+        bias_max = reward_max * init_scale
+        
+        # Reasonable gain
+        gain_divisor = simple_config.get('gain_divisor', 10.0)
+        critic_gain = 0.1 / max(reward_magnitude / gain_divisor, 1.0)
+        critic_gain = np.clip(critic_gain, 
+                            simple_config.get('min_gain', 0.001), 
+                            simple_config.get('max_gain', 0.1))
+        
+        return {
+            'critic_gain': float(critic_gain),
+            'bias_min': float(bias_min), 
+            'bias_max': float(bias_max),
+            'expected_q_min': float(bias_min),
+            'expected_q_max': float(bias_max)
+        }
+    
     def train_offline(self):
         """Train SAC model offline using the CSV data with full logging"""
         
@@ -437,7 +525,7 @@ class OfflineSACTrainer:
                         f"Actor: {train_metrics['actor_loss']:.4f}, "
                         f"Critic: {train_metrics['critic_loss']:.4f}, "
                         f"Alpha: {train_metrics['alpha']:.3f}, "
-                        f"Val Loss: {val_metrics.get('loss', 0):.4f}"
+                        f"Val Loss: {val_metrics.get('val_loss', 0):.4f}"
                     )
                 
                 # Tensorboard logging
@@ -522,7 +610,8 @@ class OfflineSACTrainer:
             # Step 5: Critic losses
             critic1_loss = nn.MSELoss()(current_q1, target_q)  # L_Q₁ = 1/B Σ(Q_θ₁(s_i, a_i) - y_i)²
             critic2_loss = nn.MSELoss()(current_q2, target_q)  # L_Q₂ = 1/B Σ(Q_θ₂(s_i, a_i) - y_i)²
-            
+            # print(critic1_loss.item())
+            # print(critic2_loss.item())  
             # Step 6: Backpropagate critic losses
             # θ₁ ← θ₁ - η_Q ∇_θ₁ L_Q₁
             self.critic1_optimizer.zero_grad()
@@ -584,36 +673,139 @@ class OfflineSACTrainer:
         }
 
     def _validate_epoch(self):
-        """Validate for one epoch"""
-        total_q_loss = 0
-        total_reward = 0
+        """Validate for one epoch - evaluate model performance without parameter updates"""
+        total_actor_loss = 0
+        total_critic_loss = 0
+        total_alpha_loss = 0
+        total_q1_values = 0
+        total_q2_values = 0
+        total_target_q_values = 0
+        total_log_probs = 0
         num_batches = 0
         
+        # Set models to evaluation mode
         self.actor.eval()
         self.critic1.eval()
         self.critic2.eval()
         
-        with torch.no_grad():
+        with torch.no_grad():  # Disable gradient computation for validation
             for batch in self.val_loader:
-                # Move batch to device
-                current_states = batch['current_state'].to(self.device)
-                actions = batch['action'].to(self.device)
-                rewards = batch['reward'].to(self.device)
+                # Step 1: Sample batch from validation dataset (s_i, a_i, r_i, s'_i) ~ D_val
+                current_states = batch['current_state'].to(self.device)  # s_i
+                actions = batch['action'].to(self.device)                # a_i  
+                rewards = batch['reward'].unsqueeze(1).to(self.device)   # r_i
+                next_states = batch['next_state'].to(self.device)        # s'_i
+                dones = batch['done'].unsqueeze(1).to(self.device)       # terminal flags
                 
-                q1 = self.critic1(current_states, actions)
-                q2 = self.critic2(current_states, actions)
-                q_pred = torch.min(q1, q2).squeeze()
+                # Step 2: Actor inference on next states (for critic target)
+                next_actions, next_log_probs, _ = self.actor.sample(next_states)  # a'_i ~ π_φ(a|s'_i)
                 
-                q_loss = nn.MSELoss()(q_pred, rewards)
-                total_q_loss += q_loss.item()
-                total_reward += rewards.mean().item()
+                # Step 3: Target Q-value (Bellman target)
+                target_q1 = self.target_critic1(next_states, next_actions)  # Q_θ̄₁(s'_i, a'_i)
+                target_q2 = self.target_critic2(next_states, next_actions)  # Q_θ̄₂(s'_i, a'_i)
+                target_q_min = torch.min(target_q1, target_q2)              # min(Q_θ̄₁, Q_θ̄₂)
+                
+                # y_i = r_i + γ(min(Q_θ̄₁(s'_i, a'_i), Q_θ̄₂(s'_i, a'_i)) - α log π_φ(a'_i | s'_i))
+                target_q = rewards + (1 - dones) * self.gamma * (target_q_min - self.alpha * next_log_probs)
+                
+                # Step 4: Critic forward pass on current data
+                current_q1 = self.critic1(current_states, actions)  # Q_θ₁(s_i, a_i)
+                current_q2 = self.critic2(current_states, actions)  # Q_θ₂(s_i, a_i)
+                
+                # Step 5: Critic losses (computed but not backpropagated)
+                critic1_loss = nn.MSELoss()(current_q1, target_q)  # L_Q₁ = 1/B Σ(Q_θ₁(s_i, a_i) - y_i)²
+                critic2_loss = nn.MSELoss()(current_q2, target_q)  # L_Q₂ = 1/B Σ(Q_θ₂(s_i, a_i) - y_i)²
+                
+                # Step 6: Actor inference on current states
+                new_actions, log_probs, _ = self.actor.sample(current_states)  # a_i^new ~ π_φ(a|s_i)
+                
+                # Step 7: Actor Q-value evaluation  
+                q1_new = self.critic1(current_states, new_actions)    # Q_θ₁(s_i, a_i^new)
+                q2_new = self.critic2(current_states, new_actions)    # Q_θ₂(s_i, a_i^new)
+                q_min = torch.min(q1_new, q2_new)                    # Q_min,i = min(Q_θ₁, Q_θ₂)
+                
+                # Step 8: Actor (policy) loss (computed but not backpropagated)
+                # L_π = 1/B Σ[α log π_φ(a_i^new | s_i) - Q_min,i]
+                actor_loss = (self.alpha * log_probs - q_min).mean()
+                
+                # Step 9: Temperature loss (if α is learnable)
+                # L_α = 1/B Σ α(-log π_φ(a_i^new | s_i) - H_target)
+                if self.auto_entropy_tuning:
+                    alpha_loss = -(self.log_alpha * (log_probs + self.target_entropy).detach()).mean()
+                else:
+                    alpha_loss = torch.tensor(0.0)
+                
+                # Accumulate losses and metrics for logging
+                total_actor_loss += actor_loss.item()
+                total_critic_loss += (critic1_loss.item() + critic2_loss.item()) / 2
+                total_alpha_loss += alpha_loss.item()
+                # print(f"Actor Loss: {actor_loss.item():.4f}, Critic Loss: {total_critic_loss:.4f}, Alpha Loss: {alpha_loss.item():.4f}")
+                # print(critic1_loss.item())
+                # print(critic2_loss.item())
+                # breakpoint()
+                # Additional validation metrics
+                total_q1_values += current_q1.mean().item()
+                total_q2_values += current_q2.mean().item()
+                total_target_q_values += target_q.mean().item()
+                total_log_probs += log_probs.mean().item()
+                
                 num_batches += 1
         
+        # Set models back to training mode
+        self.actor.train()
+        self.critic1.train()
+        self.critic2.train()
+        
         return {
-            'q_loss': total_q_loss / num_batches,
-            'avg_reward': total_reward / num_batches,
-            'loss': total_q_loss / num_batches
+            'val_actor_loss': total_actor_loss / num_batches,
+            'val_critic_loss': total_critic_loss / num_batches,
+            'val_alpha_loss': total_alpha_loss / num_batches,
+            'val_alpha': self.alpha.item(),
+            'val_loss': (total_actor_loss + total_critic_loss) / num_batches,
+            # Additional validation metrics
+            'val_q1_mean': total_q1_values / num_batches,
+            'val_q2_mean': total_q2_values / num_batches,
+            'val_target_q_mean': total_target_q_values / num_batches,
+            'val_log_prob_mean': total_log_probs / num_batches,
+            'val_entropy': -total_log_probs / num_batches  # Approximate entropy
         }
+    # def _validate_epoch(self):
+    #     """Validate for one epoch"""
+    #     total_q_loss = 0
+    #     total_reward = 0
+    #     num_batches = 0
+        
+    #     self.actor.eval()
+    #     self.critic1.eval()
+    #     self.critic2.eval()
+        
+    #     with torch.no_grad():
+    #         for batch in self.val_loader:
+    #             # Move batch to device
+    #             current_states = batch['current_state'].to(self.device)
+    #             actions = batch['action'].to(self.device)
+    #             rewards = batch['reward'].to(self.device)
+                
+    #             q1 = self.critic1(current_states, actions)
+    #             q2 = self.critic2(current_states, actions)
+    #             q_pred = torch.min(q1, q2).squeeze()
+
+    #             # DEBUG
+    #             # print(f"Q-pred range: [{q_pred.min().item():.2f}, {q_pred.max().item():.2f}]")
+    #             # print(f"Rewards range: [{rewards.min().item():.2f}, {rewards.max().item():.2f}]")
+    #             # print(f"Q-pred mean: {q_pred.mean().item():.2f}")
+    #             # print(f"Rewards mean: {rewards.mean().item():.2f}")
+
+    #             q_loss = nn.MSELoss()(q_pred, rewards)
+    #             total_q_loss += q_loss.item()
+    #             total_reward += rewards.mean().item()
+    #             num_batches += 1
+        
+    #     return {
+    #         'q_loss': total_q_loss / num_batches,
+    #         'avg_reward': total_reward / num_batches,
+    #         'loss': total_q_loss / num_batches
+    #     }
 
     def _soft_update_target_networks(self):
         """Soft update target networks"""
