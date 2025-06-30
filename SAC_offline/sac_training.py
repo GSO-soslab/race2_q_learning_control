@@ -616,11 +616,21 @@ class OfflineSACTrainer:
             # θ₁ ← θ₁ - η_Q ∇_θ₁ L_Q₁
             self.critic1_optimizer.zero_grad()
             critic1_loss.backward()
+            if hasattr(self, 'config') and 'gradient_clipping' in self.config.get('sac', {}):
+                if self.config['sac']['gradient_clipping']['enabled']:
+                    torch.nn.utils.clip_grad_norm_(
+                        self.critic1.parameters(), 
+                        self.config['sac']['gradient_clipping']['max_norm']
+                    )
             self.critic1_optimizer.step()
             
             # θ₂ ← θ₂ - η_Q ∇_θ₂ L_Q₂  
             self.critic2_optimizer.zero_grad()
             critic2_loss.backward()
+            torch.nn.utils.clip_grad_norm_(
+                self.critic2.parameters(), 
+                self.config['sac']['gradient_clipping']['max_norm']
+            )
             self.critic2_optimizer.step()
             
             # Step 7: Actor inference on current states
@@ -639,6 +649,10 @@ class OfflineSACTrainer:
             # φ ← φ - η_π ∇_φ L_π
             self.actor_optimizer.zero_grad()
             actor_loss.backward()
+            torch.nn.utils.clip_grad_norm_(
+                self.actor.parameters(), 
+                self.config['sac']['gradient_clipping']['max_norm']
+            )
             self.actor_optimizer.step()
             
             # Step 11: Temperature loss and update (if α is learnable)
