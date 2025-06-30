@@ -222,3 +222,10 @@ reproducibility:
   seed: 42                             # Global random seed
   deterministic: true                  # Use deterministic algorithms where possible
   benchmark: false                     # Enable cudnn benchmark for speed (less deterministic)
+
+# Inference configuration
+inference:
+  control_frequency: 10.0  # Hz - should match training data frequency
+  max_episode_steps: 500
+  default_deterministic: true
+  timeout_multiplier: 1.5  # multiply control_period by this for ROS2 timeout
