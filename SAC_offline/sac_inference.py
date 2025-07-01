@@ -241,15 +241,15 @@ class SimpleAUVROS2Node(Node):
         self.thruster_pubs['surge_port'].publish(Float64(data=float(surge_port)))
         self.thruster_pubs['surge_starboard'].publish(Float64(data=float(surge_starboard)))
         
-        # # Publish servo commands if available
-        # if len(action) > 4:
-        #     self.thruster_pubs['port_servo'].publish(Float64(data=float(action[4])))
-        # if len(action) > 5:
-        #     self.thruster_pubs['starboard_servo'].publish(Float64(data=float(action[5])))
+        # Publish servo commands if available
+        if len(action) > 4:
+            self.thruster_pubs['port_servo'].publish(Float64(data=float(action[4])))
+        if len(action) > 5:
+            self.thruster_pubs['starboard_servo'].publish(Float64(data=float(action[5])))
         
-        # Hardcode servo commands to 0
-        self.thruster_pubs['port_servo'].publish(Float64(data=0.0))
-        self.thruster_pubs['starboard_servo'].publish(Float64(data=0.0))
+        # # Hardcode servo commands to 0
+        # self.thruster_pubs['port_servo'].publish(Float64(data=0.0))
+        # self.thruster_pubs['starboard_servo'].publish(Float64(data=0.0))
         
         self.last_action_timestamp = time.time()
         self.new_state_available = False
@@ -333,8 +333,8 @@ class OfflineSACInference:
                 'setpoint': {
                     'pos_z_range': [1.0, 8.0],
                     'ori_z_range': [-2.14, 2.14],
-                    'ori_y_range': [-0.1, 0.1],
-                    'vel_x_range': [-0.6, 0.6]
+                    'ori_y_range': [-0.0, 0.0],
+                    'vel_x_range': [-0.25, 0.25]
                 },
                 'inference': {
                     'control_frequency': 10.0,

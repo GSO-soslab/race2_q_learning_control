@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 class AUVDataset(Dataset):
     """Dataset for AUV training data from CSV"""
     
-    def __init__(self, csv_file, device='cpu'):
+    def __init__(self, csv_file, config=None, device='cpu'):
         print(f"Loading dataset from {csv_file}...")
         self.data = pd.read_csv(csv_file)
         self.device = device
@@ -31,10 +31,20 @@ class AUVDataset(Dataset):
         # Extract column groups
         self.curr_cols = sorted([c for c in self.data.columns if c.startswith('curr_')])
         self.next_cols = sorted([c for c in self.data.columns if c.startswith('next_')])
-        self.action_cols = sorted([c for c in self.data.columns if c.startswith('action_')])
+
+        exclude_servos = config.get('data', {}).get('exclude_servos', False)
+        if exclude_servos:
+            self.action_cols = sorted([c for c in self.data.columns if c.startswith('action_') and 'servo' not in c.lower()])
+        else:
+            self.action_cols = sorted([c for c in self.data.columns if c.startswith('action_')])
         
         print(f"State dimensions: {len(self.curr_cols)} (current) + {len(self.next_cols)} (next)")
         print(f"Action dimensions: {len(self.action_cols)}")
+
+        # self.action_cols = sorted([c for c in self.data.columns if c.startswith('action_')])
+        
+        # print(f"State dimensions: {len(self.curr_cols)} (current) + {len(self.next_cols)} (next)")
+        # print(f"Action dimensions: {len(self.action_cols)}")
         
         # Convert to tensors - KEEP ON CPU for DataLoader compatibility
         self.current_states = torch.FloatTensor(self.data[self.curr_cols].values)
@@ -257,7 +267,7 @@ class OfflineSACTrainer:
         self.logger.info(f"Loading data from: {csv_file}")
         
         # Load full dataset - keep on CPU
-        full_dataset = AUVDataset(csv_file, device='cpu')
+        full_dataset = AUVDataset(csv_file, config=self.config, device='cpu')
 
         # ANALYZE REWARD STATISTICS for adaptive initialization
         rewards = full_dataset.rewards.numpy()

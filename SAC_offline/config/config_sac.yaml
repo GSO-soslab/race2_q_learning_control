@@ -8,6 +8,7 @@ data:
   normalize_states: false              # Whether to normalize state observations
   normalize_actions: false             # Whether to normalize action data
   random_seed: 42                     # Random seed for reproducibility
+  exclude_servos: true  
 
 # Model Architecture
 model:
@@ -45,9 +46,9 @@ model:
 # SAC Algorithm Parameters
 sac:
   # Learning rates
-  actor_lr: 3e-3                       # Actor learning rate
-  critic_lr: 3e-3                      # Critic learning rate
-  alpha_lr: 3e-3                       # Entropy coefficient learning rate
+  actor_lr: 9e-6                       # Actor learning rate
+  critic_lr: 9e-5                      # Critic learning rate
+  alpha_lr: 3e-4                       # Entropy coefficient learning rate
   
   # SAC hyperparameters
   gamma: 0.99                          # Discount factor
@@ -202,15 +203,15 @@ reward_function:
     0.0,  # heave
     0.0,  # roll
     0.1,  # pitch
-    1.0   # yaw
+    1.1   # yaw
   ]
 
 # Environment parameters (for reference/compatibility)
 environment:
   state_dim: 24                        # State observation dimension
-  action_dim: 6                        # Action dimension (4 thrusters + 2 servos)
+  action_dim: 4                        # Action dimension (4 thrusters + 2 servos)
   thruster_size: 4                     # Number of thrusters
-  servo_joints_size: 2                 # Number of servo joints
+  servo_joints_size: 0                 # Number of servo joints
   max_action: 1.0                      # Maximum action value
   
 # Debugging and Development
@@ -230,6 +231,6 @@ reproducibility:
 # Inference configuration
 inference:
   control_frequency: 10.0  # Hz - should match training data frequency
-  max_episode_steps: 500
+  max_episode_steps: 1000
   default_deterministic: true
   timeout_multiplier: 1.5  # multiply control_period by this for ROS2 timeout
