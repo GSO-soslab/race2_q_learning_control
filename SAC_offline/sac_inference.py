@@ -142,21 +142,40 @@ class SimpleAUVROS2Node(Node):
         self.last_state_timestamp = 0
         self.last_error_timestamp = 0
         
-        # Current setpoint
+        # Current setpoint and tracking
         self.current_setpoint = None
+        self.setpoint_count = 0
+        self.last_setpoint_time = 0
         
         # Setpoint ranges from config
         setpoint_config = self.config.get('setpoint', {})
         self.pos_z_range = setpoint_config.get('pos_z_range', [1.0, 8.0])
         self.ori_z_range = setpoint_config.get('ori_z_range', [-2.14, 2.14])
-        self.ori_y_range = setpoint_config.get('ori_y_range', [-0.1, 0.1])
-        self.vel_x_range = setpoint_config.get('vel_x_range', [-0.6, 0.6])
+        self.ori_y_range = setpoint_config.get('ori_y_range', [-0.0, 0.0])
+        self.vel_x_range = setpoint_config.get('vel_x_range', [-0.2, 0.2])
+        
+        # Dynamic setpoint settings
+        inference_config = self.config.get('inference', {})
+        self.setpoint_change_interval = inference_config.get('setpoint_change_interval_sec', 30.0)
+        self.auto_change_setpoints = inference_config.get('auto_change_setpoints', True)
     
     def publish_current_setpoint_callback(self):
         """Continuously publish the current setpoint"""
         if self.current_setpoint is not None:
             self.current_setpoint.header.stamp = self.get_clock().now().to_msg()
             self.setpoint_publisher.publish(self.current_setpoint)
+    
+    # Check if setpoint should change
+    def should_change_setpoint(self):
+        """Check if it's time to change setpoint"""
+        if not self.auto_change_setpoints:
+            return False
+        
+        current_time = time.time()
+        if self.last_setpoint_time == 0:
+            return True  # First setpoint
+        
+        return (current_time - self.last_setpoint_time) >= self.setpoint_change_interval
     
     def publish_new_setpoint(self):
         """Generate and publish a new setpoint"""
@@ -185,6 +204,10 @@ class SimpleAUVROS2Node(Node):
         msg.angular_rate = Vector3(x=0.0, y=0.0, z=0.0)
         
         self.current_setpoint = msg
+        # Track setpoint changes
+        self.last_setpoint_time = time.time()
+        self.setpoint_count += 1
+        
         msg.header.stamp = self.get_clock().now().to_msg()
         self.setpoint_publisher.publish(msg)
         
@@ -195,7 +218,8 @@ class SimpleAUVROS2Node(Node):
         if self.current_setpoint is None:
             return "No setpoint generated yet"
         
-        return (f"Setpoint - pos_z: {self.current_setpoint.position.z:.2f}, "
+        # Include setpoint count
+        return (f"Setpoint #{self.setpoint_count} - pos_z: {self.current_setpoint.position.z:.2f}, "
                 f"ori_z: {self.current_setpoint.orientation.z:.2f}, "
                 f"ori_y: {self.current_setpoint.orientation.y:.2f}, "
                 f"vel_x: {self.current_setpoint.velocity.x:.2f}")
@@ -246,10 +270,6 @@ class SimpleAUVROS2Node(Node):
             self.thruster_pubs['port_servo'].publish(Float64(data=float(action[4])))
         if len(action) > 5:
             self.thruster_pubs['starboard_servo'].publish(Float64(data=float(action[5])))
-        
-        # # Hardcode servo commands to 0
-        # self.thruster_pubs['port_servo'].publish(Float64(data=0.0))
-        # self.thruster_pubs['starboard_servo'].publish(Float64(data=0.0))
         
         self.last_action_timestamp = time.time()
         self.new_state_available = False
@@ -310,6 +330,13 @@ class OfflineSACInference:
         self.logger.info(f"   Model: {os.path.basename(model_path)}")
         self.logger.info(f"   State dim: {self.state_dim}, Action dim: {self.action_dim}")
         self.logger.info(f"   Device: {self.device}")
+        
+        # Log setpoint settings
+        inference_config = self.config.get('inference', {})
+        if inference_config.get('auto_change_setpoints', True):
+            self.logger.info(f"   Setpoint changes: Every {inference_config.get('setpoint_change_interval_sec', 30.0)}s")
+        else:
+            self.logger.info(f"   Setpoint changes: Disabled")
     
     def _setup_device(self, device):
         if device == 'auto':
@@ -328,7 +355,7 @@ class OfflineSACInference:
             with open(config_path, 'r') as f:
                 return yaml.safe_load(f)
         else:
-            # Return minimal default config
+            # Return minimal default config with NEW setpoint settings
             return {
                 'setpoint': {
                     'pos_z_range': [1.0, 8.0],
@@ -340,7 +367,9 @@ class OfflineSACInference:
                     'control_frequency': 10.0,
                     'max_episode_steps': 500,
                     'default_deterministic': True,
-                    'timeout_multiplier': 1.5
+                    'timeout_multiplier': 1.5,
+                    'setpoint_change_interval_sec': 30.0,
+                    'auto_change_setpoints': True
                 }
             }
     
@@ -475,6 +504,126 @@ class OfflineSACInference:
         
         self.logger.warning("⚠️  Timeout waiting for initial ROS2 data")
         return False
+    
+    # NEW ADDITION: Continuous operation mode
+    def run_continuous(self, deterministic=None, verbose=True):
+        """Run continuous control with dynamic setpoints (runs until interrupted)"""
+        
+        # Use config defaults if not specified
+        inference_config = self.config.get('inference', {})
+        if deterministic is None:
+            deterministic = inference_config.get('default_deterministic', True)
+        
+        policy_type = "deterministic" if deterministic else "stochastic"
+        self.logger.info(f"Starting continuous SAC control...")
+        self.logger.info(f"  Policy: {policy_type}")
+        if self.node.auto_change_setpoints:
+            self.logger.info(f"  Setpoint changes: Every {self.node.setpoint_change_interval}s")
+        else:
+            self.logger.info(f"  Setpoint changes: Disabled")
+        self.logger.info(f"  Press Ctrl+C to stop")
+        
+        # Wait for initial data
+        if not self._wait_for_initial_data():
+            self.logger.error("Failed to get initial ROS2 data")
+            return None
+        
+        # Generate initial setpoint
+        setpoint = self.node.publish_new_setpoint()
+        self.logger.info(f"Initial setpoint: {self.node.get_current_setpoint_info()}")
+        
+        # Initialize tracking
+        total_steps = 0
+        step_rewards = []
+        start_time = time.time()
+        last_log_time = start_time
+        log_interval = 10.0  # Log every 10 seconds
+        
+        try:
+            # Main control loop - runs until interrupted
+            while True:
+                # NEW: Check if we should change setpoint
+                if self.node.should_change_setpoint():
+                    old_info = self.node.get_current_setpoint_info()
+                    setpoint = self.node.publish_new_setpoint()
+                    new_info = self.node.get_current_setpoint_info()
+                    self.logger.info(f"🎯 Setpoint changed: {new_info}")
+                
+                # Get current observation from ROS2 node
+                try:
+                    obs = self._get_current_observation()
+                except Exception as e:
+                    self.logger.warning(f"Failed to get observation: {e}")
+                    self._spin_node(timeout_sec=0.1)
+                    continue
+                
+                # Predict action using trained actor
+                action = self.predict_action(obs, deterministic=deterministic)
+                
+                # Publish action directly to ROS2 topics
+                self.node.publish_action(action)
+                
+                # Wait for new state/error data after action
+                timeout_multiplier = self.config.get('inference', {}).get('timeout_multiplier', 1.5)
+                timeout_sec = self.control_period * timeout_multiplier
+                start_wait_time = time.time()
+                
+                while not (self.node.new_state_available and self.node.new_error_available):
+                    self._spin_node(timeout_sec=0.01)
+                    if time.time() - start_wait_time > timeout_sec:
+                        self.logger.warning("Timeout waiting for state/error updates")
+                        break
+                
+                # Calculate reward (simplified version)
+                if self.node.new_state_available and self.node.new_error_available:
+                    # Get state error for reward calculation
+                    state_error_array = np.concatenate([
+                        self.node.position_err[2:3],  # depth error
+                        self.node.v_err[0:2],  # surge, sway velocity errors
+                        self.node.v_err[2:3],  # heave velocity error
+                        self.node.orientation_err[:3]  # roll, pitch, yaw errors
+                    ])
+                    
+                    # Simple quadratic penalty reward
+                    reward = -np.sum(state_error_array ** 2)
+                    step_rewards.append(reward)
+                    total_steps += 1
+                    
+                    # Periodic logging
+                    current_time = time.time()
+                    if current_time - last_log_time >= log_interval:
+                        elapsed_time = current_time - start_time
+                        avg_reward = np.mean(step_rewards[-100:])  # Last 100 steps
+                        
+                        self.logger.info(f"📊 Step {total_steps} | "
+                                       f"Time: {elapsed_time:.1f}s | "
+                                       f"Avg Reward: {avg_reward:.4f} | "
+                                       f"Setpoints: {self.node.setpoint_count}")
+                        last_log_time = current_time
+                else:
+                    self.logger.warning("No new state/error data available")
+                
+                # Match training frequency
+                time.sleep(self.control_period)
+        
+        except KeyboardInterrupt:
+            self.logger.info("🛑 Control interrupted by user")
+        
+        # Final summary
+        total_time = time.time() - start_time
+        self.logger.info(f"📈 Continuous control completed:")
+        self.logger.info(f"   Total time: {total_time:.1f}s")
+        self.logger.info(f"   Total steps: {total_steps}")
+        self.logger.info(f"   Setpoint changes: {self.node.setpoint_count}")
+        if step_rewards:
+            self.logger.info(f"   Average reward: {np.mean(step_rewards):.4f}")
+        
+        return {
+            'total_time': total_time,
+            'total_steps': total_steps,
+            'setpoint_changes': self.node.setpoint_count,
+            'rewards': np.array(step_rewards) if step_rewards else np.array([]),
+        }
     
     def run_episode(self, max_steps=None, deterministic=None, verbose=True):
         """Run a single episode using direct ROS2 interaction"""
@@ -721,22 +870,36 @@ Interface: Simplified ROS2 (no dependencies)"""
 
 def main():
     """Main inference function"""
-    parser = argparse.ArgumentParser(description='SAC Offline-to-Online Inference with Direct ROS2')
+    parser = argparse.ArgumentParser(description='SAC Inference with Dynamic Setpoints')
     parser.add_argument('model_path', help='Path to trained SAC model (.pth file)')
     parser.add_argument('--config', type=str, help='Path to config file')
-    parser.add_argument('--episodes', type=int, default=5, help='Number of episodes to run')
-    parser.add_argument('--max-steps', type=int, default=500, help='Maximum steps per episode')
+    
+    # Operation modes
+    parser.add_argument('--continuous', action='store_true', default=True,
+                       help='Run continuous control (default mode)')
+    parser.add_argument('--episodes', type=int, default=0, 
+                       help='Number of episodes to run (0 = continuous mode)')
+    parser.add_argument('--max-steps', type=int, default=500, 
+                       help='Maximum steps per episode (only for episode mode)')
+    
+    # Control settings
     parser.add_argument('--deterministic', action='store_true', default=True, 
                        help='Use deterministic policy (default: True)')
     parser.add_argument('--stochastic', action='store_true', 
                        help='Use stochastic policy (overrides --deterministic)')
+    parser.add_argument('--frequency', type=float, default=10.0, 
+                       help='Control frequency in Hz (default: 10 Hz)')
+    
+    # Setpoint settings
+    parser.add_argument('--setpoint-interval', type=float, default=30.0,
+                       help='Setpoint change interval in seconds (default: 30s)')
+    parser.add_argument('--no-setpoint-changes', action='store_true',
+                       help='Disable automatic setpoint changes')
+    
+    # Other options
     parser.add_argument('--device', type=str, default='auto', 
                        choices=['auto', 'cpu', 'cuda'], help='Device to use')
-    parser.add_argument('--frequency', type=float, default=10.0, 
-                       help='Control frequency in Hz (default: 10 Hz to match training)')
     parser.add_argument('--output-dir', type=str, help='Output directory for results')
-    parser.add_argument('--single-episode', action='store_true', 
-                       help='Run only a single episode')
     
     args = parser.parse_args()
     
@@ -745,67 +908,73 @@ def main():
         print(f"❌ Model file not found: {args.model_path}")
         return 1
     
-    # Determine policy type
+    # Determine operation mode
+    continuous_mode = args.episodes == 0
     deterministic = args.deterministic and not args.stochastic
     policy_type = "deterministic" if deterministic else "stochastic"
     
     try:
-        # Initialize inference
+        # Load base config and apply overrides
+        base_config = {}
+        if args.config and os.path.exists(args.config):
+            with open(args.config, 'r') as f:
+                base_config = yaml.safe_load(f)
+        
+        # Override config with command line args
+        if 'inference' not in base_config:
+            base_config['inference'] = {}
+        
+        base_config['inference'].update({
+            'control_frequency': args.frequency,
+            'default_deterministic': deterministic,
+            'setpoint_change_interval_sec': args.setpoint_interval,
+            'auto_change_setpoints': not args.no_setpoint_changes,
+        })
+        
         print(f"🚀 Initializing SAC inference...")
         print(f"   Model: {args.model_path}")
+        print(f"   Mode: {'Continuous' if continuous_mode else f'{args.episodes} episodes'}")
         print(f"   Policy: {policy_type}")
-        print(f"   Device: {args.device}")
-        print(f"   Interface: Simplified ROS2 (no dependencies)")
+        if not args.no_setpoint_changes:
+            print(f"   Setpoint changes: Every {args.setpoint_interval}s")
+        else:
+            print(f"   Setpoint changes: Disabled")
+        
+        # Save config temporarily
+        temp_config_path = 'temp_inference_config.yaml'
+        with open(temp_config_path, 'w') as f:
+            yaml.dump(base_config, f)
         
         inference = OfflineSACInference(
             model_path=args.model_path,
-            config_path=args.config,
+            config_path=temp_config_path,
             device=args.device,
             control_frequency=args.frequency
         )
         
-        if args.single_episode:
-            # Run single episode
-            print(f"\n🎮 Running single episode...")
-            result = inference.run_episode(
-                max_steps=args.max_steps,
-                deterministic=deterministic,
-                verbose=True
-            )
-            
-            if result:
-                print(f"\n✅ Episode completed!")
-                print(f"   Total reward: {result['total_reward']:.3f}")
-                print(f"   Steps: {result['steps']}")
-                print(f"   Setpoint: {result['setpoint_info']}")
-            else:
-                print(f"\n❌ Episode failed!")
-            
+        if continuous_mode:
+            print(f"\n🎮 Starting continuous control (Press Ctrl+C to stop)...")
+            results = inference.run_continuous(deterministic=deterministic)
         else:
-            # Run multiple episodes
             print(f"\n🎮 Running {args.episodes} episodes...")
-            episode_results, summary = inference.run_multiple_episodes(
+            results = inference.run_multiple_episodes(
                 num_episodes=args.episodes,
                 max_steps=args.max_steps,
                 deterministic=deterministic
             )
             
-            if episode_results and summary:
-                # Save results
-                output_dir = inference.save_results(episode_results, summary, args.output_dir)
-                
-                print(f"\n✅ Evaluation completed!")
-                print(f"📂 Results saved to: {output_dir}")
-            else:
-                print(f"\n❌ Evaluation failed!")
+            if results:
+                output_dir = inference.save_results(results[0], results[1], args.output_dir)
+                print(f"\n✅ Results saved to: {output_dir}")
         
         # Cleanup
+        os.remove(temp_config_path)
         inference.close()
         return 0
         
     except KeyboardInterrupt:
-        print("\n⚠️  Inference interrupted by user")
-        return 1
+        print(f"\n⚠️  Inference interrupted by user")
+        return 0
     except Exception as e:
         print(f"❌ Inference failed: {e}")
         import traceback
