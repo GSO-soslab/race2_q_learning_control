@@ -19,7 +19,7 @@ try:
     print("✓ Using rosbag2_py (official ROS2 method)")
 except ImportError:
     print("✗ ROS2 packages not found. Make sure ROS2 is sourced:")
-    print("source /opt/ros/humble/setup.bash")
+    print("source /opt/ros/jazzy/setup.bash")
     ROSBAG2_AVAILABLE = False
 
 class McapToTrainingCSV:
@@ -290,8 +290,8 @@ class McapToTrainingCSV:
                                 print(f"⚠️  Error processing {topic}: {e}")
                     
                     # Progress indicator for large bags
-                    if total_messages % 10000 == 0:
-                        print(f"   Processed {total_messages:,} messages...")
+                    # if total_messages % 10000 == 0:
+                    #     print(f"   Processed {total_messages:,} messages...")
                 
                 reader.close()
                 
