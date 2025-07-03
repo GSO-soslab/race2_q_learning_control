@@ -366,7 +366,7 @@ class McapToTrainingCSV:
         # Use state as reference (should be 10Hz)
         state_df = dataframes['state']
         print(f"Using state as reference: {len(state_df)} timesteps")
-        
+        #Sync data use the data filter , thruster based on previous value to be interpolated, IMU is faster to interpolate
         # Synchronize other topics to state timestamps
         synchronized_data = []
         tolerance = 0.05  # 50ms tolerance
