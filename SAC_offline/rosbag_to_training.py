@@ -44,13 +44,13 @@ class McapToTrainingCSV:
         }
         
         # Alternative topic patterns to search for
-        self.topic_patterns = {
-            'state': ['/race2_auv/controller/process/value', '/controller/process/value', 
-                     '/race2_auv/state', '/state', '/process/value'],
-            'error': ['/race2_auv/controller/process/error', '/controller/process/error',
-                     '/race2_auv/error', '/error', '/process/error'],
-            'imu': ['/race2_auv/imu/data', '/imu/data', '/race2_auv/imu', '/imu']
-        }
+        # self.topic_patterns = {
+        #     'state': ['/race2_auv/controller/process/value', '/controller/process/value', 
+        #              '/race2_auv/state', '/state', '/process/value'],
+        #     'error': ['/race2_auv/controller/process/error', '/controller/process/error',
+        #              '/race2_auv/error', '/error', '/process/error'],
+        #     'imu': ['/race2_auv/imu/data', '/imu/data', '/race2_auv/imu', '/imu']
+        # }
         
         # State observation components (24 elements)
         self.obs_columns = [
@@ -112,17 +112,17 @@ class McapToTrainingCSV:
                     status = "✓ MAPPED" if alias else "○ unmapped"
                     print(f"{status:12} | {topic_metadata.name:50} | {topic_metadata.type}")
                 
-                # Check for potential state topics
-                print(f"\n🔍 Searching for potential state topics:")
-                state_candidates = []
-                for topic_metadata in topic_types:
-                    topic_name = topic_metadata.name.lower()
-                    if any(pattern in topic_name for pattern in ['state', 'process', 'controller']):
-                        state_candidates.append(topic_metadata.name)
-                        print(f"   📍 {topic_metadata.name} ({topic_metadata.type})")
+                # # Check for potential state topics
+                # print(f"\n🔍 Searching for potential state topics:")
+                # state_candidates = []
+                # for topic_metadata in topic_types:
+                #     topic_name = topic_metadata.name.lower()
+                #     if any(pattern in topic_name for pattern in ['state', 'process', 'controller']):
+                #         state_candidates.append(topic_metadata.name)
+                #         print(f"   📍 {topic_metadata.name} ({topic_metadata.type})")
                 
-                if not state_candidates:
-                    print("   ❌ No potential state topics found!")
+                # if not state_candidates:
+                #     print("   ❌ No potential state topics found!")
                 
                 reader.close()
                 return topic_types
@@ -143,15 +143,15 @@ class McapToTrainingCSV:
         # Create a list of available topic names
         available_topics = [t.name for t in topic_types]
         
-        # Try to find mappings using patterns
-        for alias, patterns in self.topic_patterns.items():
-            for pattern in patterns:
-                if pattern in available_topics:
-                    detected_mappings[pattern] = alias
-                    print(f"✓ Found {alias}: {pattern}")
-                    break
-            else:
-                print(f"❌ Could not find topic for {alias}")
+        # # Try to find mappings using patterns
+        # for alias, patterns in self.topic_patterns.items():
+        #     for pattern in patterns:
+        #         if pattern in available_topics:
+        #             detected_mappings[pattern] = alias
+        #             print(f"✓ Found {alias}: {pattern}")
+        #             break
+        #     else:
+        #         print(f"❌ Could not find topic for {alias}")
         
         # Update topic mappings if we found better matches
         if detected_mappings:
