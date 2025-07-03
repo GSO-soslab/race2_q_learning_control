@@ -1,10 +1,6 @@
-#rosbag_to_training.py
-
 #!/usr/bin/env python3
 """
-Direct MCAP/ROS2 bag to training CSV converter
-Input: .mcap or .db3 ROS2 bag file
-Output: Single CSV with timestamp, current_state, next_state, actions, reward
+Enhanced MCAP/ROS2 bag to training CSV converter with debugging
 """
 
 import pandas as pd
@@ -33,6 +29,7 @@ class McapToTrainingCSV:
         
         # Initialize coupling reward calculator
         self.coupling_calculator = CouplingAwareRewardCalculator(self.config) if self.config else None
+        
         # Define topic mappings (update these to match your actual topics)
         self.topic_mappings = {
             '/race2_auv/controller/process/value': 'state',
@@ -44,6 +41,15 @@ class McapToTrainingCSV:
             '/race2_auv/control/thruster/surge_starboard': 'thrust_surge_starboard',
             '/race2_auv/control/surge_port_servo': 'servo_port',
             '/race2_auv/control/surge_starboard_servo': 'servo_starboard'
+        }
+        
+        # Alternative topic patterns to search for
+        self.topic_patterns = {
+            'state': ['/race2_auv/controller/process/value', '/controller/process/value', 
+                     '/race2_auv/state', '/state', '/process/value'],
+            'error': ['/race2_auv/controller/process/error', '/controller/process/error',
+                     '/race2_auv/error', '/error', '/process/error'],
+            'imu': ['/race2_auv/imu/data', '/imu/data', '/race2_auv/imu', '/imu']
         }
         
         # State observation components (24 elements)
@@ -70,18 +76,126 @@ class McapToTrainingCSV:
                 return yaml.safe_load(f)
         return None
     
-    def convert_bag_to_training_csv(self, bag_path, output_csv):
+    def list_topics(self, bag_path):
+        """List all topics in the bag file for debugging"""
+        print(f"📋 Listing topics in {bag_path}")
+        
+        if not ROSBAG2_AVAILABLE:
+            raise ImportError("rosbag2_py not available. Source your ROS2 environment first.")
+        
+        uri_options = [str(bag_path), str(Path(bag_path).parent)]
+        
+        for uri in uri_options:
+            try:
+                print(f"Trying URI: {uri}")
+                
+                storage_options = rosbag2_py.StorageOptions(
+                    uri=uri,
+                    storage_id='mcap'
+                )
+                converter_options = rosbag2_py.ConverterOptions(
+                    input_serialization_format='cdr',
+                    output_serialization_format='cdr'
+                )
+                
+                reader = rosbag2_py.SequentialReader()
+                reader.open(storage_options, converter_options)
+                
+                # Get available topics
+                topic_types = reader.get_all_topics_and_types()
+                
+                print(f"\n📊 Found {len(topic_types)} topics:")
+                print("-" * 80)
+                
+                for topic_metadata in topic_types:
+                    alias = self.topic_mappings.get(topic_metadata.name)
+                    status = "✓ MAPPED" if alias else "○ unmapped"
+                    print(f"{status:12} | {topic_metadata.name:50} | {topic_metadata.type}")
+                
+                # Check for potential state topics
+                print(f"\n🔍 Searching for potential state topics:")
+                state_candidates = []
+                for topic_metadata in topic_types:
+                    topic_name = topic_metadata.name.lower()
+                    if any(pattern in topic_name for pattern in ['state', 'process', 'controller']):
+                        state_candidates.append(topic_metadata.name)
+                        print(f"   📍 {topic_metadata.name} ({topic_metadata.type})")
+                
+                if not state_candidates:
+                    print("   ❌ No potential state topics found!")
+                
+                reader.close()
+                return topic_types
+                
+            except Exception as e:
+                print(f"Failed with URI {uri}: {e}")
+                continue
+        
+        raise Exception("All bag reading attempts failed")
+    
+    def auto_detect_topics(self, bag_path):
+        """Auto-detect topic mappings based on available topics"""
+        print("🔍 Auto-detecting topic mappings...")
+        
+        topic_types = self.list_topics(bag_path)
+        detected_mappings = {}
+        
+        # Create a list of available topic names
+        available_topics = [t.name for t in topic_types]
+        
+        # Try to find mappings using patterns
+        for alias, patterns in self.topic_patterns.items():
+            for pattern in patterns:
+                if pattern in available_topics:
+                    detected_mappings[pattern] = alias
+                    print(f"✓ Found {alias}: {pattern}")
+                    break
+            else:
+                print(f"❌ Could not find topic for {alias}")
+        
+        # Update topic mappings if we found better matches
+        if detected_mappings:
+            print(f"\n🔄 Updating topic mappings:")
+            for topic, alias in detected_mappings.items():
+                if topic != self.topic_mappings.get(topic):
+                    print(f"   {topic} → {alias}")
+                    # Add to existing mappings
+                    self.topic_mappings[topic] = alias
+        
+        return detected_mappings
+    
+    def convert_bag_to_training_csv(self, bag_path, output_csv, auto_detect=True):
         """
         Main function: MCAP/ROS2 bag → Training CSV
         
         Args:
             bag_path: Path to .mcap or .db3 bag file
             output_csv: Output CSV file path
+            auto_detect: Whether to auto-detect topic mappings
         """
         print(f"🎯 Converting {bag_path} → {output_csv}")
         
+        # Auto-detect topics if requested
+        if auto_detect:
+            self.auto_detect_topics(bag_path)
+        
         # Step 1: Extract raw data from bag
         raw_data = self._extract_bag_data(bag_path)
+        
+        # Debug: Show what data we actually extracted
+        print(f"\n📊 Extracted data summary:")
+        for topic, data in raw_data.items():
+            print(f"   {topic}: {len(data)} messages")
+        
+        # Check if we have state data
+        if 'state' not in raw_data or len(raw_data['state']) == 0:
+            print(f"\n❌ No 'state' data found!")
+            print(f"Available topics: {list(raw_data.keys())}")
+            print(f"\nSuggestions:")
+            print(f"1. Run with --list-topics to see available topics")
+            print(f"2. Update topic_mappings in the code")
+            print(f"3. Check if the state topic exists in your bag")
+            raise ValueError("No state data found - cannot synchronize")
         
         # Step 2: Synchronize topics to common timeline  
         sync_data = self._synchronize_topics(raw_data)
@@ -112,7 +226,7 @@ class McapToTrainingCSV:
         raw_data = defaultdict(list)
         message_counts = defaultdict(int)
         
-        # Try file path first, then directory (same as your old script)
+        # Try file path first, then directory
         uri_options = [str(bag_path), str(Path(bag_path).parent)]
         
         for uri in uri_options:
@@ -136,14 +250,23 @@ class McapToTrainingCSV:
                 type_map = {topic_metadata.name: topic_metadata.type for topic_metadata in topic_types}
                 
                 print(f"✓ Found {len(topic_types)} topics:")
+                mapped_count = 0
                 for topic_metadata in topic_types:
                     alias = self.topic_mappings.get(topic_metadata.name)
-                    status = "✓" if alias else "○"
-                    print(f"  {status} {topic_metadata.name} → {alias or 'unused'}")
+                    if alias:
+                        mapped_count += 1
+                        print(f"  ✓ {topic_metadata.name} → {alias}")
+                    else:
+                        print(f"  ○ {topic_metadata.name} (unused)")
+                
+                if mapped_count == 0:
+                    print("⚠️  No topics mapped! Check your topic_mappings configuration.")
                 
                 # Read messages
+                total_messages = 0
                 while reader.has_next():
                     (topic, data, timestamp) = reader.read_next()
+                    total_messages += 1
                     
                     if topic in self.topic_mappings:
                         try:
@@ -163,13 +286,18 @@ class McapToTrainingCSV:
                             message_counts[alias] += 1
                             
                         except Exception as e:
-                            if message_counts[alias] < 5:  # Only show first few errors
+                            if message_counts.get(alias, 0) < 5:  # Only show first few errors
                                 print(f"⚠️  Error processing {topic}: {e}")
+                    
+                    # Progress indicator for large bags
+                    if total_messages % 10000 == 0:
+                        print(f"   Processed {total_messages:,} messages...")
                 
                 reader.close()
                 
                 # Summary
-                print(f"\n📊 Extracted data summary:")
+                print(f"\n📊 Extraction complete:")
+                print(f"   Total messages processed: {total_messages:,}")
                 for alias, count in message_counts.items():
                     print(f"   {alias}: {count:,} messages")
                 
@@ -183,44 +311,6 @@ class McapToTrainingCSV:
     
     def _extract_message_data_rosbag2(self, msg, msg_type):
         """Extract data from ROS message using rosbag2_py deserializer"""
-        data = {}
-        
-        if 'ControlProcess' in msg_type:
-            # Extract ControlProcess message (state/error)
-            data.update({
-                'position_x': msg.position.x,
-                'position_y': msg.position.y, 
-                'position_z': msg.position.z,
-                'orientation_x': msg.orientation.x,
-                'orientation_y': msg.orientation.y,
-                'orientation_z': msg.orientation.z,
-                'velocity_x': msg.velocity.x,
-                'velocity_y': msg.velocity.y,
-                'velocity_z': msg.velocity.z,
-                'angular_rate_x': msg.angular_rate.x,
-                'angular_rate_y': msg.angular_rate.y,
-                'angular_rate_z': msg.angular_rate.z
-            })
-            
-        elif 'Imu' in msg_type:
-            # Extract IMU message
-            data.update({
-                'linear_accel_x': msg.linear_acceleration.x,
-                'linear_accel_y': msg.linear_acceleration.y,
-                'linear_accel_z': msg.linear_acceleration.z,
-                'angular_vel_x': msg.angular_velocity.x,
-                'angular_vel_y': msg.angular_velocity.y,
-                'angular_vel_z': msg.angular_velocity.z
-            })
-            
-        elif 'Float64' in msg_type:
-            # Extract Float64 message (thrusters/servos)
-            data['value'] = msg.data
-            
-        return data
-    
-    def _extract_message_data(self, msg, msg_type):
-        """Extract data from ROS message based on type"""
         data = {}
         
         if 'ControlProcess' in msg_type:
@@ -505,6 +595,8 @@ def main():
                        default="config/config_sac.yaml")
     parser.add_argument("--list-topics", action="store_true", 
                        help="List topics without converting")
+    parser.add_argument("--no-auto-detect", action="store_true",
+                       help="Don't auto-detect topic mappings")
     
     args = parser.parse_args()
     
@@ -515,18 +607,24 @@ def main():
     converter = McapToTrainingCSV(config_path=args.config)
     
     if args.list_topics:
-        # Add topic listing functionality if needed
-        print("Topic listing not yet implemented")
-        return 0
+        try:
+            converter.list_topics(args.mcap_file)
+            return 0
+        except Exception as e:
+            print(f"❌ Failed to list topics: {e}")
+            return 1
     
     try:
-        df = converter.convert_bag_to_training_csv(args.mcap_file, args.output)
+        auto_detect = not args.no_auto_detect
+        df = converter.convert_bag_to_training_csv(args.mcap_file, args.output, auto_detect=auto_detect)
         print(f"\n🎉 Success! Training data ready for SAC")
         print(f"Output: {args.output}")
         print(f"Shape: {df.shape}")
         return 0
     except Exception as e:
         print(f"❌ Conversion failed: {e}")
+        import traceback
+        traceback.print_exc()
         return 1
 
 
