@@ -310,7 +310,7 @@ class CouplingAwareRewardCalculator:
             # Individual error energies with enhanced weights for problem areas
             individual_energy = 0.5 * (
                 depth_error**2 + 
-                ((np.exp( surge_error))**2) + 
+                surge_error**2 +     
                 2.0 * pitch_error_mag**2 +  # ENHANCED: 2x weight for pitch
                 1.5 * yaw_error_mag**2       # ENHANCED: 1.5x weight for yaw offset
             )
