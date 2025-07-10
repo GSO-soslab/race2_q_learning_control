@@ -10,6 +10,13 @@
 pip install torch pandas numpy pyyaml tqdm matplotlib tensorboard
 pip install rosbag2_py rclpy 
 
+# Install MVP Messages package
+cd ~/ros2_ws/src
+git clone https://github.com/uri-ocean-robotics/mvp_msgs.git
+cd ~/ros2_ws
+colcon build --packages-select mvp_msgs
+source install/setup.bash
+
 # Source ROS2 (if using bag conversion)
 source /opt/ros/jazzy/setup.bash
 ```
